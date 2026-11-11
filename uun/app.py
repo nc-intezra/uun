@@ -148,6 +148,7 @@ class UunApp(App):
         self.mgrs: list[managers.Manager] = []
         self.checks: dict[str, managers.CheckResult] = {}
         self.statuses: list[eol.EolStatus] = []
+        self.session_eol: dict | None = None   # fresh EoL data that couldn't be cached
         self.alts = scan.load_alternatives(cfg.alternatives_file)
         self.family = "apt"
         self.keys = {k: a for k, a in DEFAULT_KEYS.items() if k not in self.tmux.unbinds}
@@ -274,6 +275,12 @@ class UunApp(App):
             n_err = len(res.get("errors", {}))
             self.call_from_thread(self.log_line, f"EoL data: {len(res['products'])} products"
                                   + (f", {n_err} failed: {', '.join(list(res['errors'])[:5])}" if n_err else ""))
+            if res.get("cache_error"):
+                # keep this session's fresh data even though it couldn't be saved
+                self.session_eol = res
+                self.call_from_thread(self.log_line, res["cache_error"])
+                self.call_from_thread(self.notify, res["cache_error"], severity="warning",
+                                      timeout=8, markup=False)
             self.call_from_thread(self.update_titlebar)
         self.mgrs = managers.available(self.cfg.managers)
         self.call_from_thread(self._mgr_placeholders)
@@ -282,7 +289,8 @@ class UunApp(App):
             self.checks[name] = res
         self.call_from_thread(self.render_mgrs)
         found = detect.detect(detect.load_specs(self.cfg.products_file))
-        self.statuses = scan.evaluate_all(self.cfg, found, self.checks)
+        self.statuses = scan.evaluate_all(self.cfg, found, self.checks,
+                                          self.session_eol)
         self.call_from_thread(self.render_eol)
         self.call_from_thread(self.render_detail)
         att = sum(s.needs_attention for s in self.statuses)

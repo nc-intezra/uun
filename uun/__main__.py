@@ -20,11 +20,17 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
 
     from pathlib import Path
-    from .config import UnsafeFileError, load_config
+    from .config import ConfigError, UnsafeFileError, load_config
     try:
         cfg = load_config(Path(a.config) if a.config else None)
     except UnsafeFileError as e:
         print(f"uun: refusing to run: {e}", file=sys.stderr)
+        return 3
+    except ConfigError as e:
+        print(f"uun: {e}", file=sys.stderr)
+        return 3
+    except Exception as e:  # e.g. invalid TOML: one clear line, no traceback
+        print(f"uun: cannot load configuration: {type(e).__name__}: {e}", file=sys.stderr)
         return 3
     if a.theme:
         cfg.theme = a.theme
@@ -36,10 +42,13 @@ def main(argv: list[str] | None = None) -> int:
     if a.refresh_eol:
         from . import eol, scan
         res = eol.refresh(cfg.eol_api, scan.all_slugs(cfg))
-        print(f"uun: cached {len(res['products'])} products")
+        if res.get("cache_error"):
+            print(f"uun: {res['cache_error']}", file=sys.stderr)
+        else:
+            print(f"uun: cached {len(res['products'])} products")
         for slug, err in res.get("errors", {}).items():
             print(f"  {slug}: {err}", file=sys.stderr)
-        return 0 if res["products"] else 1
+        return 0 if res["products"] and not res.get("cache_error") else 1
     if a.report:
         from . import scan
         return scan.report(cfg, as_json=a.json)

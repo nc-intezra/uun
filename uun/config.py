@@ -30,6 +30,42 @@ def data_path(name: str) -> Path:
 from .safety import UnsafeFileError, read_trusted  # noqa: E402  (re-exported)
 
 
+class ConfigError(RuntimeError):
+    """A config location exists but can't be accessed. Fatal on purpose:
+    silently falling back to defaults could drop settings such as use_sudo."""
+
+
+def _xdg_hint(path: Path) -> str:
+    for var in ("XDG_CONFIG_HOME", "XDG_CACHE_HOME"):
+        val = os.environ.get(var)
+        if val and str(path).startswith(val.rstrip("/") + "/"):
+            return (f" ({var}={val} — is it pointing at another user's directory? "
+                    f"unset it or point it at your own)")
+    return ""
+
+
+def _access_error(path: Path, e: OSError) -> ConfigError:
+    return ConfigError(f"cannot access {path}: {e.strerror or e}{_xdg_hint(path)}")
+
+
+def _present(path: Path) -> bool:
+    """exists() that turns 'permission denied' into a clear ConfigError
+    instead of a traceback (missing files are normal and return False)."""
+    try:
+        return path.exists()
+    except OSError as e:
+        raise _access_error(path, e) from None
+
+
+def _read(path: Path) -> str:
+    try:
+        return read_trusted(path)
+    except UnsafeFileError:
+        raise
+    except OSError as e:
+        raise _access_error(path, e) from None
+
+
 def assert_safe(path: Path) -> str:
     """Validate and read a file that may define commands run under sudo.
     See safety.read_trusted (fd-based checks + directory chain, no TOCTOU)."""
@@ -65,8 +101,8 @@ def load_config(path: Path | None = None) -> Config:
     defaults = tomllib.loads(read_trusted(data_path("config.default.toml")))
     path = path or CONFIG_FILE
     user: dict = {}
-    if path.exists():
-        user = tomllib.loads(read_trusted(path))
+    if _present(path):
+        user = tomllib.loads(_read(path))
     merged = _merge(defaults, user)
     g = merged.get("general", {})
     cfg = Config(
@@ -85,8 +121,8 @@ def load_config(path: Path | None = None) -> Config:
     for key, attr, default in (("products", "products_file", "products.toml"),
                                ("alternatives", "alternatives_file", "alternatives.toml")):
         user_file = CONFIG_DIR / default
-        if user_file.exists():
-            read_trusted(user_file)  # fail early; readers re-validate on every read
+        if _present(user_file):
+            _read(user_file)  # fail early; readers re-validate on every read
             setattr(cfg, attr, user_file)
         else:
             setattr(cfg, attr, data_path(default))

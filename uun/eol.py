@@ -110,11 +110,26 @@ def refresh(api: str, slugs: list[str], cache: Path = EOL_CACHE, timeout: float 
             else:
                 errors[slug] = err or "unknown error"
     out = {"fetched_at": time.time(), "products": products, "errors": errors}
-    cache.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd, tmp = tempfile.mkstemp(dir=cache.parent, prefix=".eol-", suffix=".json")
-    with os.fdopen(fd, "w") as f:
-        json.dump(out, f)
-    os.replace(tmp, cache)
+    tmp = None
+    try:
+        cache.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        fd, tmp = tempfile.mkstemp(dir=cache.parent, prefix=".eol-", suffix=".json")
+        with os.fdopen(fd, "w") as f:
+            json.dump(out, f)
+        os.replace(tmp, cache)
+    except OSError as e:
+        # Unwritable cache (e.g. XDG_CACHE_HOME pointing at another user's
+        # home): keep the fetched data for this session, report clearly.
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        hint = ""
+        val = os.environ.get("XDG_CACHE_HOME")
+        if val and str(cache).startswith(val.rstrip("/") + "/"):
+            hint = f" (XDG_CACHE_HOME={val} — is it pointing at another user's directory?)"
+        out["cache_error"] = f"cannot write EoL cache {cache}: {e.strerror or e}{hint}"
     return out
 
 

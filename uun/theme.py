@@ -191,20 +191,29 @@ def theme_dirs() -> list[Path]:
 
 def find_theme(name: str) -> Path | None:
     p = Path(name).expanduser()
-    if p.suffix == ".conf" and p.exists():
-        return p
+    try:
+        if p.suffix == ".conf" and p.exists():
+            return p
+    except OSError:
+        return None
     for d in theme_dirs():
         f = d / f"{name}.conf"
-        if f.exists():
-            return f
+        try:
+            if f.exists():
+                return f
+        except OSError:
+            continue  # unreadable theme dir (e.g. foreign XDG_CONFIG_HOME): skip it
     return None
 
 
 def list_themes() -> list[str]:
     names: set[str] = set()
     for d in theme_dirs():
-        if d.is_dir():
-            names.update(f.stem for f in d.glob("*.conf"))
+        try:
+            if d.is_dir():
+                names.update(f.stem for f in d.glob("*.conf"))
+        except OSError:
+            continue
     return sorted(names)
 
 
@@ -257,7 +266,11 @@ def _parse_file(theme: TmuxTheme, path: Path, depth: int) -> None:
                 target = Path(args[0]).expanduser()
                 if not target.is_absolute():
                     target = path.parent / target
-                if target.exists():
+                try:
+                    present = target.exists()
+                except OSError as e:
+                    raise ValueError(f"cannot access {target}: {e.strerror or e}") from None
+                if present:
                     _parse_file(theme, target, depth + 1)
                 elif "q" not in flags:
                     raise ValueError(f"no such file {target}")
