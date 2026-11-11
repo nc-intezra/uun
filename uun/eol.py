@@ -16,7 +16,7 @@ from pathlib import Path
 
 from . import __version__
 from .config import EOL_CACHE
-from .safety import clean, clean_date, clean_url
+from .safety import SHUTDOWN, clean, clean_date, clean_url
 
 _SLUG = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _RELNAME = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._+-]{0,31}$")
@@ -67,6 +67,8 @@ def normalize_product(result, fallback_label: str) -> dict | None:
 
 
 def _fetch_one(api: str, slug: str, timeout: float) -> tuple[str, dict | None, str | None]:
+    if SHUTDOWN.is_set():
+        return slug, None, "cancelled"
     if not _SLUG.match(slug):
         return slug, None, "invalid product slug"
     url = f"{api.rstrip('/')}/{urllib.parse.quote(slug)}"
@@ -84,6 +86,8 @@ def _fetch_one(api: str, slug: str, timeout: float) -> tuple[str, dict | None, s
                     return slug, None, "response too large"
                 if time.monotonic() - start > DEADLINE:
                     return slug, None, "response too slow"
+                if SHUTDOWN.is_set():
+                    return slug, None, "cancelled"
                 chunks.append(chunk)
         data = json.loads(b"".join(chunks))
         prod = normalize_product(data.get("result") if isinstance(data, dict) else None, slug)

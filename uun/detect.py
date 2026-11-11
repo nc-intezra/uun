@@ -4,12 +4,11 @@ from __future__ import annotations
 import os
 import platform
 import re
-import subprocess
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .safety import SAFE_CWD, child_env, clean, read_trusted, which
+from .safety import child_env, clean, read_trusted, run_tracked, which
 
 EXTRA_PATH = ["/usr/sbin", "/sbin", "/usr/local/sbin", "/usr/local/bin", "/snap/bin"]
 
@@ -64,14 +63,14 @@ def _run_probe(argv: list[str], env: dict) -> str | None:
     if not exe:
         return None
     try:
-        # cwd=/ : `python3 -c "import django"` must not import ./django.py from
-        # whatever directory the user launched uun in.
-        r = subprocess.run([exe, *argv[1:]], capture_output=True, text=True, timeout=8,
-                           env=env, stdin=subprocess.DEVNULL, cwd=SAFE_CWD,
-                           errors="replace")
-    except (OSError, subprocess.TimeoutExpired):
+        # run_tracked uses cwd=/ : `python3 -c "import django"` must not import
+        # ./django.py from whatever directory the user launched uun in.
+        rc, out, err = run_tracked([exe, *argv[1:]], timeout=8, env=env)
+    except OSError:
         return None
-    return (r.stdout or "") + "\n" + (r.stderr or "")
+    if rc in (124, 130):
+        return None
+    return (out or "") + "\n" + (err or "")
 
 
 def os_release() -> dict:

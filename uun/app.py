@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import socket
 import subprocess
 import time
@@ -16,7 +17,7 @@ from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, RichLog, Static
 
 from . import __version__, detect, eol, managers, scan
-from .safety import SAFE_CWD, child_env, clean
+from .safety import SAFE_CWD, SHUTDOWN, child_env, clean, stop_background
 from .config import Config
 from .theme import BORDER_MAP, TmuxTheme, list_themes, load_theme
 
@@ -149,6 +150,9 @@ class UunApp(App):
         self.checks: dict[str, managers.CheckResult] = {}
         self.statuses: list[eol.EolStatus] = []
         self.session_eol: dict | None = None   # fresh EoL data that couldn't be cached
+        self.updating = False                  # a package update is running
+        self._scan_thread: threading.Thread | None = None
+        self._scan_pending: str | None = None  # "plain" / "eol": rescan requested mid-scan
         self.alts = scan.load_alternatives(cfg.alternatives_file)
         self.family = "apt"
         self.keys = {k: a for k, a in DEFAULT_KEYS.items() if k not in self.tmux.unbinds}
@@ -262,8 +266,41 @@ class UunApp(App):
     def action_refresh_eol(self) -> None:
         self.rescan(force_eol=True)
 
-    @work(thread=True, exclusive=True, group="scan")
     def rescan(self, force_eol: bool = False) -> None:
+        """Start a background scan on a *daemon* thread (not Textual's worker
+        pool): asyncio's shutdown would otherwise wait for a scan blocked on a
+        slow tool or network call, so quitting would hang (issue seen on
+        Ubuntu 24.04 in v0.1.0)."""
+        if self._scan_thread is not None and self._scan_thread.is_alive():
+            # remember the request; it runs when the current scan finishes
+            self._scan_pending = "eol" if force_eol else (self._scan_pending or "plain")
+            return
+        self._scan_thread = threading.Thread(target=self._scan_thread_main, args=(force_eol,),
+                                             name="uun-scan", daemon=True)
+        self._scan_thread.start()
+
+    def _scan_thread_main(self, force_eol: bool) -> None:
+        try:
+            self._scan(force_eol)
+        except Exception as e:  # never let a scan error kill the app silently
+            if not SHUTDOWN.is_set():
+                try:
+                    self.call_from_thread(self.log_line, f"scan error: {type(e).__name__}: {e}")
+                except RuntimeError:
+                    pass
+        finally:
+            if not SHUTDOWN.is_set():
+                try:
+                    self.call_from_thread(self._scan_finished)
+                except RuntimeError:
+                    pass  # app already closed
+
+    def _scan_finished(self) -> None:
+        pending, self._scan_pending = self._scan_pending, None
+        if pending:
+            self.rescan(force_eol=(pending == "eol"))
+
+    def _scan(self, force_eol: bool = False) -> None:
         if self.demo:
             from . import demo
             self.call_from_thread(self._demo_load, demo)
@@ -428,6 +465,17 @@ class UunApp(App):
             self.copy_to_clipboard(text)
             self.notify(f"copied: {text}", timeout=3, markup=False)
 
+    async def action_quit(self) -> None:
+        if self.updating:
+            self.notify("A package update is running and isn't safe to interrupt. "
+                        "Quit again once it has finished.",
+                        severity="warning", timeout=6, markup=False)
+            return
+        # Stop read-only background checks now (kills their process groups) so
+        # nothing keeps the process alive after the TUI closes.
+        stop_background(grace=1.0)
+        self.exit()
+
     def action_toggle_log(self) -> None:
         self.query_one("#log-pane").toggle_class("hidden")
 
@@ -492,6 +540,14 @@ class UunApp(App):
 
     @work(thread=True, exclusive=True, group="update")
     def _run_streaming(self, cmds: list[list[str]]) -> None:
+        self.updating = True
+        try:
+            self._stream_cmds(cmds)
+        finally:
+            self.updating = False
+        self.call_from_thread(self.rescan)
+
+    def _stream_cmds(self, cmds: list[list[str]]) -> None:
         for c in cmds:
             c = [c[0], "-n", *c[1:]] if c and os.path.basename(c[0]) == "sudo" else c
             self.call_from_thread(self.log_line, "$ " + " ".join(c))
@@ -503,4 +559,3 @@ class UunApp(App):
             if p.wait() != 0:
                 self.call_from_thread(self.log_line, f"failed (exit {p.returncode})")
                 break
-        self.call_from_thread(self.rescan)

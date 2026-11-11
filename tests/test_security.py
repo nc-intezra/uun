@@ -52,10 +52,10 @@ class UUN01_CwdCodeExecution(unittest.TestCase):
     def test_children_run_in_safe_cwd(self):
         seen = {}
 
-        def fake_run(argv, **kw):
+        def fake_popen(argv, **kw):
             seen["cwd"] = kw.get("cwd")
             raise OSError("stop")
-        with mock.patch("subprocess.run", fake_run):
+        with mock.patch("subprocess.Popen", fake_popen):
             managers.run(["sh", "-c", "true"])
         self.assertEqual(seen["cwd"], "/")
 

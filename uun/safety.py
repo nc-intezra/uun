@@ -8,7 +8,11 @@ from __future__ import annotations
 
 import os
 import re
+import signal
 import stat
+import subprocess
+import threading
+import time
 from pathlib import Path
 
 # Every child process runs here. "/" is root-owned, so cwd-relative lookups
@@ -160,3 +164,66 @@ def clean_date(v) -> str | None:
 
 def clean_url(v) -> str | None:
     return v if isinstance(v, str) and len(v) < 300 and _HTTPS.match(v) else None
+
+
+# ------------------------------------------------------------- background jobs
+# Read-only checks/probes run in their own process group and are tracked, so
+# quitting the TUI can stop them (and anything they spawned) immediately instead
+# of waiting for up to their full timeout. Package *updates* never go through
+# here: interrupting apt/dnf mid-install could damage the system.
+
+SHUTDOWN = threading.Event()
+_children: set = set()
+_children_lock = threading.Lock()
+
+
+def _signal_group(p: subprocess.Popen, sig: int) -> None:
+    try:
+        os.killpg(p.pid, sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def run_tracked(argv: list[str], timeout: float, env: dict) -> tuple[int, str, str]:
+    """subprocess.run() equivalent for background checks: cancellable on exit,
+    and a timeout kills the whole process group (helpers like apt's http
+    methods included), not just the direct child."""
+    if SHUTDOWN.is_set():
+        return 130, "", "cancelled"
+    p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         stdin=subprocess.DEVNULL, cwd=SAFE_CWD, env=env, text=True,
+                         errors="replace", start_new_session=True)
+    with _children_lock:
+        _children.add(p)
+    try:
+        out, err = p.communicate(timeout=timeout)
+        if SHUTDOWN.is_set():
+            return 130, "", "cancelled"
+        return p.returncode, out, err
+    except subprocess.TimeoutExpired:
+        _signal_group(p, signal.SIGKILL)
+        p.communicate()
+        return 124, "", f"timed out after {timeout:g}s"
+    finally:
+        with _children_lock:
+            _children.discard(p)
+
+
+def stop_background(grace: float = 2.0) -> int:
+    """Cancel pending checks and terminate running ones. Returns how many
+    process groups were signalled."""
+    SHUTDOWN.set()
+    with _children_lock:
+        procs = list(_children)
+    for p in procs:
+        _signal_group(p, signal.SIGTERM)
+    deadline = time.monotonic() + grace
+    for p in procs:
+        try:
+            p.wait(timeout=max(0.0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            pass
+        # The group leader exiting doesn't mean its children did (e.g. a tool
+        # that ignores SIGTERM); finish the whole group off.
+        _signal_group(p, signal.SIGKILL)
+    return len(procs)
