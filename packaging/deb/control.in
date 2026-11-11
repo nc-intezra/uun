@@ -1,0 +1,19 @@
+Package: uun
+Version: @VERSION@-1
+Architecture: all
+Maintainer: nc-intezra <nc-intezra@users.noreply.github.com>
+Depends: python3 (>= 3.11) | python3.11 | python3.12 | python3.13
+Recommends: sudo
+Section: admin
+Priority: optional
+Homepage: https://github.com/nc-intezra/uun
+Installed-Size: @SIZE@
+Description: universal update notifier TUI with end-of-life tracking
+ One terminal UI to run updates across apt, dnf, zypper, pacman, flatpak,
+ snap, Homebrew, pip, pipx, cargo, rustup and npm, and to track end-of-life
+ dates for the OS, kernel, runtimes and servers using endoflife.date data.
+ Suggests open-source alternatives when software is EoL with no supported
+ update inbound. Themable with tmux-style config files.
+ .
+ Pure Python with bundled dependencies (textual, rich, pygments, ...); works
+ on amd64, arm64 and armhf (Raspberry Pi OS) alike.

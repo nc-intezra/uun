@@ -25,11 +25,30 @@ It's built entirely on open-source software: Python ≥ 3.11 and [Textual](https
 
 ## Install
 
+**Packages (recommended).** Download from [Releases](https://github.com/nc-intezra/uun/releases), check the file against `SHA256SUMS`, then install:
+
+```bash
+sha256sum -c SHA256SUMS --ignore-missing
+# Ubuntu 24.04+, Debian 12+, Raspberry Pi OS (bookworm+, arm64/armhf)
+sudo apt install ./uun_0.1.0-1_all.deb
+# Fedora, RHEL/Rocky/Alma 9 (pulls in python3.11+ automatically)
+sudo dnf install ./uun-0.1.0-1.noarch.rpm
+# openSUSE Leap 15.6
+sudo zypper install --allow-unsigned-rpm ./uun-0.1.0-1.noarch.rpm
+
+systemctl --user enable --now uun-eol-refresh.timer   # daily EoL data refresh
+uun --demo                                            # safe preview
+```
+
+Both packages are architecture-independent and bundle their pure-Python dependencies in `/usr/lib/uun`. They need Python 3.11 or newer, from the distro's default `python3` or a parallel `python3.11`/`python3.12` package. The `/usr/bin/uun` launcher only uses interpreters in `/usr/bin` and runs them isolated (`python -I`).
+
+**From source:**
+
 ```bash
 ./install.sh            # pipx (or a private venv) + daily EoL refresh timer
-uun --demo              # safe preview on canned data: try themes and keys
-uun                     # the real thing
 ```
+
+**Building packages:** `packaging/build.sh <source-dir> <out-dir>` produces reproducible wheel, sdist, `.deb` and `.rpm` files plus `SHA256SUMS`. The `release` GitHub Actions workflow builds them for a tag, install-tests them on Ubuntu, Debian, Raspberry Pi (arm64/armhf), Rocky, Alma, Fedora and openSUSE, and attaches them to the release.
 
 ## Keys
 

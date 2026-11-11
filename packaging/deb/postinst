@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+# Pre-compile bytecode for every installed Python >= 3.11 (fixed paths only).
+for py in /usr/bin/python3 /usr/bin/python3.11 /usr/bin/python3.12 /usr/bin/python3.13 /usr/bin/python3.14; do
+    [ -x "$py" ] || continue
+    "$py" -I -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>/dev/null || continue
+    "$py" -I -m compileall -q -j 0 /usr/lib/uun >/dev/null 2>&1 || true
+done
+if [ "$1" = "configure" ]; then
+    echo "uun: enable the daily EoL data refresh per user with:"
+    echo "     systemctl --user enable --now uun-eol-refresh.timer"
+fi
+exit 0
