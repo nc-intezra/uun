@@ -192,7 +192,9 @@ jobs:
                  -f name="uun $TAG" -F draft=true --jq .id)
           fi
           draft=$(gh api "repos/$REPO/releases/$id" --jq .draft)
-          args=(-f name="uun $TAG")
+          # Always send tag_name: PATCHing a draft without it can leave GitHub
+          # publishing under a placeholder "untagged-<hash>" tag (v0.1.0 run 43063964635).
+          args=(-f name="uun $TAG" -f tag_name="$TAG")
           [ "$draft" = true ] && args+=(-f target_commitish="$SHA")
           [ -f "notes/$TAG.md" ] && args+=(-F "body=@notes/$TAG.md")
           gh api -X PATCH "repos/$REPO/releases/$id" "${args[@]}" --jq '"release " + .name + " -> " + .target_commitish'
@@ -204,8 +206,19 @@ jobs:
               -H "Content-Type: application/octet-stream" --input "$f" --jq '.name + "  " + (.size|tostring)'
           done
           if [ "$PUBLISH" = true ]; then
-            gh api -X PATCH "repos/$REPO/releases/$id" -F draft=false -f make_latest=true \
-              --jq '"published " + .html_url'
+            # Create an annotated tag at the built commit ourselves instead of
+            # relying on GitHub's implicit tag-on-publish.
+            if tagsha=$(gh api "repos/$REPO/commits/refs/tags/$TAG" --jq .sha 2>/dev/null); then
+              [ "$tagsha" = "$SHA" ] || { echo "tag $TAG exists at $tagsha, expected $SHA"; exit 1; }
+            else
+              tagobj=$(gh api -X POST "repos/$REPO/git/tags" -f tag="$TAG" -f message="uun $TAG" \
+                       -f object="$SHA" -f type=commit --jq .sha)
+              gh api -X POST "repos/$REPO/git/refs" -f ref="refs/tags/$TAG" -f sha="$tagobj" --jq .ref
+            fi
+            pub=$(gh api -X PATCH "repos/$REPO/releases/$id" -f tag_name="$TAG" -F draft=false \
+                  -f make_latest=true --jq '.tag_name + " " + .html_url')
+            echo "published $pub"
+            case "$pub" in "$TAG "*) ;; *) echo "release published under the wrong tag: $pub"; exit 1;; esac
             tagsha=$(gh api "repos/$REPO/commits/refs/tags/$TAG" --jq .sha)
             [ "$tagsha" = "$SHA" ] || { echo "tag $TAG points at $tagsha, expected $SHA"; exit 1; }
           fi
