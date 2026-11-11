@@ -113,12 +113,14 @@ jobs:
 
   test:
     needs: build
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner || 'ubuntu-24.04' }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { name: ubuntu-24.04,         image: "ubuntu:24.04",              platform: linux/amd64, kind: deb }
+          # Ubuntu runs on the GitHub-hosted Ubuntu VMs themselves: archive.ubuntu.com
+          # doesn't resolve from containers on these runners (the VMs use a mirror).
+          - { name: ubuntu-24.04,         image: host, runner: ubuntu-24.04,  platform: linux/amd64, kind: deb }
           - { name: debian-12,            image: "debian:12",                 platform: linux/amd64, kind: deb }
           - { name: debian-13,            image: "debian:13",                 platform: linux/amd64, kind: deb }
           - { name: raspberry-pi-arm64,   image: "debian:12",                 platform: linux/arm64, kind: deb }
@@ -128,7 +130,7 @@ jobs:
           - { name: fedora,               image: "fedora:latest",             platform: linux/amd64, kind: rpm-dnf }
           - { name: opensuse-leap-15.6,   image: "opensuse/leap:15.6",        platform: linux/amd64, kind: rpm-zypper }
           # informational: Python 3.10 by default; passes only if python3.11 is installable
-          - { name: ubuntu-22.04,         image: "ubuntu:22.04",              platform: linux/amd64, kind: deb, optional: true }
+          - { name: ubuntu-22.04,         image: host, runner: ubuntu-22.04,  platform: linux/amd64, kind: deb, optional: true }
     continue-on-error: ${{ matrix.optional == true }}
     name: test (${{ matrix.name }})
     steps:
@@ -142,15 +144,19 @@ jobs:
           path: dist
       - if: matrix.platform != 'linux/amd64'
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1  # v4.4.0
-      - name: Install-test in ${{ matrix.image }} (${{ matrix.platform }})
+      - name: Install-test on ${{ matrix.name }} (${{ matrix.platform }})
         env:
           IMAGE: ${{ matrix.image }}
           PLATFORM: ${{ matrix.platform }}
           KIND: ${{ matrix.kind }}
         run: |
           case "$KIND" in deb) f=$(ls dist/*.deb);; *) f=$(ls dist/*.rpm);; esac
-          docker run --rm --platform "$PLATFORM" -v "$PWD:/w:ro" "$IMAGE" \
-            sh /w/packaging/ci/smoke.sh "$KIND" "/w/$f"
+          if [ "$IMAGE" = host ]; then
+            sudo sh packaging/ci/smoke.sh "$KIND" "$PWD/$f"
+          else
+            docker run --rm --platform "$PLATFORM" -v "$PWD:/w:ro" "$IMAGE" \
+              sh /w/packaging/ci/smoke.sh "$KIND" "/w/$f"
+          fi
 
   upload:
     needs: [build, test]
