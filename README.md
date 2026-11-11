@@ -104,15 +104,18 @@ uun --report --json         # for monitoring pipelines
 
 ## Security notes
 
-- uun refuses to start if `config.toml`, `products.toml` or `alternatives.toml` is group- or world-writable, or owned by another non-root user. These files define commands that may run under sudo.
-- There is no `shell=True` anywhere. Probes run with a minimal environment, `LC_ALL=C`, stdin from `/dev/null`, and an 8 s timeout.
-- EoL fetches are HTTPS-only with TLS verification, a 2 MB response cap, schema-filtered JSON, product-slug validation, and atomic cache writes. If a fetch fails, the last good data is kept.
-- pip only ever touches the active virtualenv or `--user`, never system site-packages (PEP 668).
-- The systemd refresh unit is sandboxed: `ProtectSystem=strict`, `NoNewPrivileges` and restricted address families.
+See [SECURITY.md](SECURITY.md) for the full pre-release audit (CVSS-scored findings and fixes). In short:
+
+- Config files that define sudo commands are read only after their open file descriptor and every parent directory pass owner and permission checks.
+- Executables resolve only from trusted `PATH` directories. `sudo` must be a root-owned setuid binary. The confirmation dialog shows the exact absolute paths that will run, with no shell.
+- Every child process runs with `cwd=/`, so a hostile checkout you launch uun from can't inject code or tool config.
+- EoL data is fetched over HTTPS only (no redirect downgrades, 2 MB / 45 s limits) and strictly validated. Anything shown in the TUI or printed is stripped of control and bidi characters and rendered as literal text, never markup.
+- pip touches only the active virtualenv or `--user`, never system site-packages (PEP 668).
+- The systemd refresh unit is sandboxed.
 
 ## Tests
 
 ```bash
-python3 -m unittest discover -s tests   # logic tests
+python3 -m unittest discover -s tests   # logic + security regression tests
 python3 tests/shots.py                  # regenerate demo screenshots (SVG)
 ```
