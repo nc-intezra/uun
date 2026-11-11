@@ -96,6 +96,15 @@ class ManagerTests(unittest.TestCase):
         self.assertNotIn("sudo", cmd)
 
 
+class VersionTests(unittest.TestCase):
+    def test_package_and_project_versions_match(self):
+        import tomllib
+        import uun
+        root = Path(__file__).resolve().parent.parent
+        project = tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"]
+        self.assertEqual(uun.__version__, project)
+
+
 class SafetyTests(unittest.TestCase):
     def test_world_writable_config_refused(self):
         with tempfile.TemporaryDirectory() as d:
