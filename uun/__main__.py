@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from . import __version__
@@ -57,8 +58,18 @@ def main(argv: list[str] | None = None) -> int:
         print("uun: stdout is not a terminal; use --report", file=sys.stderr)
         return 1
     from .app import UunApp
-    UunApp(cfg, demo=a.demo).run()
-    return 0
+    from .safety import stop_background
+    app = UunApp(cfg, demo=a.demo)
+    app.run()
+    # The terminal is restored at this point. Stop background checks (process
+    # groups) and exit right away: otherwise Python waits at shutdown for
+    # check threads still blocked on slow tools/network (up to their timeouts).
+    # Nothing here holds state that needs flushing: the EoL cache is written
+    # atomically, and package updates can't be running (quit is refused then).
+    stop_background()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(app.return_code or 0)
 
 
 if __name__ == "__main__":

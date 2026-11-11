@@ -36,9 +36,11 @@ sudo dnf install ./uun-0.1.0-1.noarch.rpm
 # openSUSE Leap 15.6
 sudo zypper install --allow-unsigned-rpm ./uun-0.1.0-1.noarch.rpm
 
-systemctl --user enable --now uun-eol-refresh.timer   # daily EoL data refresh
+systemctl --user enable --now uun-eol-refresh.timer   # daily EoL refresh: as YOUR user, no sudo
 uun --demo                                            # safe preview
 ```
+
+The refresh timer is a **per-user** systemd unit. Run `systemctl --user` as your normal user: with `sudo` it talks to root's (non-existent) session and fails with `Failed to connect to bus`. On servers without a desktop login, also run `sudo loginctl enable-linger $USER` once so the timer runs while you're logged out. To turn it on for every user at their next login instead, use `sudo systemctl --global enable uun-eol-refresh.timer`.
 
 Both packages are architecture-independent and bundle their pure-Python dependencies in `/usr/lib/uun`. They need Python 3.11 or newer, from the distro's default `python3` or a parallel `python3.11`/`python3.12` package. The `/usr/bin/uun` launcher only uses interpreters in `/usr/bin` and runs them isolated (`python -I`).
 

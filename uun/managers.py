@@ -4,12 +4,11 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .safety import SAFE_CWD, child_env, clean, sudo_path, which
+from .safety import child_env, clean, run_tracked, sudo_path, which
 
 
 @dataclass
@@ -29,12 +28,7 @@ def run(argv: list[str], timeout: int = 300, ok=(0,)) -> tuple[int, str, str]:
     if not exe:
         return 127, "", f"{argv[0]}: not found in trusted PATH"
     try:
-        r = subprocess.run([exe, *argv[1:]], capture_output=True, text=True, timeout=timeout,
-                           env=child_env(), stdin=subprocess.DEVNULL, cwd=SAFE_CWD,
-                           errors="replace")
-        return r.returncode, r.stdout, r.stderr
-    except subprocess.TimeoutExpired:
-        return 124, "", f"timed out after {timeout}s"
+        return run_tracked([exe, *argv[1:]], timeout=timeout, env=child_env())
     except OSError as e:
         return 126, "", str(e)
 

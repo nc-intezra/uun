@@ -1,0 +1,82 @@
+name: ci
+
+# Runs on every pull request and push to main: unit/security tests, plus a real
+# systemd check that the packaged per-user EoL refresh timer works for a normal
+# user on Ubuntu 24.04 (the unit uses sandboxing options that behave
+# differently in per-user service managers).
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Unit, security and exit tests
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install -q -e .
+          "$RUNNER_TEMP/venv/bin/python" -m unittest discover -s tests -v
+
+  user-timer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and install the .deb from this commit
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install -q build
+          PATH="$RUNNER_TEMP/venv/bin:$PATH" packaging/build.sh . dist
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ./dist/*.deb
+      - name: Enable and run the timer as a normal user (no sudo for systemctl)
+        run: |
+          set -eu
+          sudo useradd -m uuntest
+          uid=$(id -u uuntest)
+          sudo loginctl enable-linger uuntest
+          for _ in $(seq 1 30); do [ -S "/run/user/$uid/bus" ] && break; sleep 1; done
+          as_user() {
+            sudo -u uuntest env -u XDG_CONFIG_HOME -u XDG_CACHE_HOME HOME=/home/uuntest \
+              XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" "$@"
+          }
+          # The runner image injects XDG_CONFIG_HOME=/home/runner/... into every
+          # user manager, re-applied on each reload; a real user's session points
+          # at their own dirs. Override it for this test user via environment.d
+          # (the supported per-user mechanism), not in the unit.
+          sudo -u uuntest mkdir -p /home/uuntest/.config/environment.d
+          printf '%s\n' XDG_CONFIG_HOME=/home/uuntest/.config XDG_CACHE_HOME=/home/uuntest/.cache \
+            XDG_DATA_HOME=/home/uuntest/.local/share XDG_STATE_HOME=/home/uuntest/.local/state \
+            | sudo -u uuntest tee /home/uuntest/.config/environment.d/90-ci-own-xdg.conf >/dev/null
+          as_user systemctl --user daemon-reload
+          as_user systemctl --user enable --now uun-eol-refresh.timer
+          # XDG_CONFIG_HOME comes from the manager's own startup environment,
+          # which outranks environment.d; set-environment outranks both and
+          # (unlike unset-environment) survives reloads.
+          as_user systemctl --user set-environment XDG_CONFIG_HOME=/home/uuntest/.config \
+            XDG_CACHE_HOME=/home/uuntest/.cache
+          as_user systemctl --user show-environment | grep '^XDG_C' || true
+          as_user systemctl --user list-timers --all 'uun*'
+          as_user systemctl --user is-active uun-eol-refresh.timer
+          # run the refresh once now and check how it went
+          as_user systemctl --user start uun-eol-refresh.service || true
+          as_user systemctl --user show uun-eol-refresh.service -p Result -p ExecMainStatus -p ExecMainCode
+          sudo journalctl _UID="$uid" --no-pager -n 40 || true
+          result=$(as_user systemctl --user show uun-eol-refresh.service -p Result --value)
+          [ "$result" = success ] || { echo "::error::refresh service result: $result"; exit 1; }
+          sudo test -s /home/uuntest/.cache/uun/eol.json || { echo "::error::no EoL cache written"; exit 1; }
+          sudo -u uuntest env -u XDG_CONFIG_HOME -u XDG_CACHE_HOME HOME=/home/uuntest /usr/bin/uun --report | sed -n '/End-of-life/,$p' | head -8
+      - name: "sudo systemctl --user fails with a clear bus error (documented)"
+        run: |
+          if sudo systemctl --user status >/dev/null 2>"$RUNNER_TEMP/err"; then
+            echo "unexpected: root user bus available"; else cat "$RUNNER_TEMP/err"; fi
