@@ -36,7 +36,9 @@ esac
 run_as() {
     if [ "$(id -u)" = 0 ] && command -v useradd >/dev/null 2>&1 && command -v su >/dev/null 2>&1; then
         id tester >/dev/null 2>&1 || useradd -m tester
-        su tester -s /bin/sh -c "$*"
+        # -l: clean login environment. CI runners export XDG_CONFIG_HOME etc.
+        # pointing at their own (private) home, which plain su would keep.
+        su -l tester -s /bin/sh -c "$*"
     else
         sh -c "$*"
     fi
