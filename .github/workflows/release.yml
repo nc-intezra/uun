@@ -132,6 +132,7 @@ jobs:
           # informational: Python 3.10 by default; passes only if python3.11 is installable
           - { name: ubuntu-22.04,         image: host, runner: ubuntu-22.04,  platform: linux/amd64, kind: deb, optional: true }
     continue-on-error: ${{ matrix.optional == true }}
+    timeout-minutes: 25
     name: test (${{ matrix.name }})
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
