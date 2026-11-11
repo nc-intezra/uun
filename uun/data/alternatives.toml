@@ -1,0 +1,120 @@
+# Open-source alternatives suggested when software is EoL (or close to it)
+# and no supported version is inbound through your package manager.
+# install.<family>: shown as a hint only; uun never installs alternatives itself
+# (they usually need a data migration). Families: apt dnf zypper pacman brew snap
+# Override/extend in ~/.config/uun/alternatives.toml
+
+[mysql]
+alternatives = [
+  { name = "MariaDB", why = "Drop-in MySQL fork, GPL, long LTS cycles", url = "https://mariadb.org/download/", install = { apt = "mariadb-server", dnf = "mariadb-server", zypper = "mariadb", pacman = "mariadb" } },
+  { name = "Percona Server for MySQL", why = "GPL MySQL build with extra hardening/observability", url = "https://www.percona.com/mysql/software" },
+  { name = "PostgreSQL", why = "If a migration is on the table anyway", url = "https://www.postgresql.org/download/", install = { apt = "postgresql", dnf = "postgresql-server", pacman = "postgresql" } },
+]
+
+[mariadb]
+alternatives = [
+  { name = "Newer MariaDB LTS", why = "MariaDB LTS lines get 3-5 years of support", url = "https://mariadb.org/download/" },
+  { name = "Percona Server for MySQL", why = "MySQL-compatible GPL build", url = "https://www.percona.com/mysql/software" },
+]
+
+[redis]
+alternatives = [
+  { name = "Valkey", why = "Linux Foundation BSD-licensed Redis fork, wire compatible", url = "https://valkey.io/download/", install = { apt = "valkey-server", dnf = "valkey", pacman = "valkey" } },
+  { name = "KeyDB", why = "Multithreaded Redis-compatible fork", url = "https://docs.keydb.dev/" },
+]
+
+[centos]
+alternatives = [
+  { name = "Rocky Linux", why = "1:1 RHEL rebuild; migrate2rocky converts in place", url = "https://rockylinux.org/download" },
+  { name = "AlmaLinux", why = "RHEL-compatible; ELevate supports in-place upgrades", url = "https://almalinux.org/get-almalinux/" },
+  { name = "CentOS Stream", why = "Upstream of RHEL, rolling minor releases", url = "https://www.centos.org/centos-stream/" },
+]
+
+[centos-stream]
+alternatives = [
+  { name = "Rocky Linux", why = "Stable RHEL rebuild", url = "https://rockylinux.org/download" },
+  { name = "AlmaLinux", why = "Stable RHEL-compatible", url = "https://almalinux.org/get-almalinux/" },
+]
+
+[ubuntu]
+alternatives = [
+  { name = "Next Ubuntu LTS", why = "Run: sudo do-release-upgrade", url = "https://ubuntu.com/download/server" },
+  { name = "Debian stable", why = "Community-run, ~5 years with LTS", url = "https://www.debian.org/distrib/" },
+]
+
+[debian]
+alternatives = [
+  { name = "Next Debian stable", why = "Update sources.list to the new codename, then full-upgrade", url = "https://www.debian.org/releases/" },
+  { name = "Freexian ELTS", why = "Paid extended security support for old releases", url = "https://www.freexian.com/lts/extended/" },
+]
+
+[fedora]
+alternatives = [
+  { name = "Next Fedora release", why = "Run: sudo dnf system-upgrade download --releasever=N", url = "https://fedoraproject.org/" },
+  { name = "Rocky / AlmaLinux", why = "If the short Fedora cycle is the problem", url = "https://rockylinux.org/download" },
+]
+
+[python]
+alternatives = [
+  { name = "Newer CPython via uv", why = "uv python install 3.x — per-user, no system changes", url = "https://docs.astral.sh/uv/guides/install-python/" },
+  { name = "pyenv", why = "Build/manage multiple CPython versions per user", url = "https://github.com/pyenv/pyenv" },
+  { name = "deadsnakes PPA (Ubuntu)", why = "Newer CPython packages for Ubuntu LTS", url = "https://launchpad.net/~deadsnakes/+archive/ubuntu/ppa" },
+]
+
+[nodejs]
+alternatives = [
+  { name = "NodeSource repo (current LTS)", why = "Repo-managed LTS builds for apt/dnf", url = "https://github.com/nodesource/distributions" },
+  { name = "fnm / nvm", why = "Per-user Node version managers", url = "https://github.com/Schniz/fnm" },
+]
+
+[php]
+alternatives = [
+  { name = "Ondřej Surý's PHP repo", why = "Supported PHP builds for Debian/Ubuntu", url = "https://deb.sury.org/" },
+  { name = "Remi's RPM repo", why = "Supported PHP builds for RHEL/Fedora", url = "https://rpms.remirepo.net/" },
+]
+
+[openssl]
+alternatives = [
+  { name = "OpenSSL 3.x LTS", why = "Current LTS branch", url = "https://openssl-library.org/source/" },
+  { name = "LibreSSL", why = "OpenBSD fork with a smaller attack surface", url = "https://www.libressl.org/" },
+]
+
+[nginx]
+alternatives = [
+  { name = "nginx.org stable repo", why = "Official packages track supported branches", url = "https://nginx.org/en/linux_packages.html" },
+  { name = "Angie", why = "Open-source nginx fork", url = "https://angie.software/en/" },
+  { name = "Caddy", why = "Memory-safe Go server with automatic TLS", url = "https://caddyserver.com/download" },
+]
+
+[apache-http-server]
+alternatives = [
+  { name = "nginx", why = "Event-driven web server / reverse proxy", url = "https://nginx.org/en/download.html" },
+  { name = "Caddy", why = "Memory-safe Go server with automatic TLS", url = "https://caddyserver.com/download" },
+]
+
+[mongodb]
+alternatives = [
+  { name = "FerretDB", why = "Apache-2.0 MongoDB-compatible layer on PostgreSQL", url = "https://www.ferretdb.com/" },
+  { name = "Newer MongoDB release", why = "Upgrade one major at a time", url = "https://www.mongodb.com/try/download/community" },
+]
+
+[terraform]
+alternatives = [
+  { name = "OpenTofu", why = "MPL-licensed Linux Foundation Terraform fork", url = "https://opentofu.org/docs/intro/install/" },
+]
+
+[docker-engine]
+alternatives = [
+  { name = "Podman", why = "Daemonless, rootless, Docker-CLI compatible", url = "https://podman.io/docs/installation", install = { apt = "podman", dnf = "podman", zypper = "podman", pacman = "podman" } },
+  { name = "Docker CE repo", why = "Docker's own repo tracks supported releases", url = "https://docs.docker.com/engine/install/" },
+]
+
+[squid]
+alternatives = [
+  { name = "Newer Squid", why = "Upgrade to a supported major", url = "https://www.squid-cache.org/Versions/" },
+]
+
+[linux]
+alternatives = [
+  { name = "Distro LTS kernel", why = "Install your distro's current kernel meta-package and reboot", url = "https://www.kernel.org/category/releases.html" },
+]

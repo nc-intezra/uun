@@ -1,0 +1,205 @@
+# Software uun probes for EoL tracking.
+# slug     = product name on https://endoflife.date (see /api/v1/products)
+# commands = argv lists tried in order (no shell); stdout+stderr are searched
+# regex    = first capture group is the version
+# exclude  = skip the probe output if this regex matches (e.g. MariaDB posing as mysqld)
+# packages = repo package-name globs; a pending update for these counts as "inbound"
+#
+# Override: copy to ~/.config/uun/products.toml (must not be group/world-writable).
+# The OS (/etc/os-release) and Linux kernel are detected automatically.
+
+[[product]]
+slug = "python"
+label = "Python"
+commands = [["python3", "--version"]]
+regex = 'Python (\d+\.\d+\.\d+)'
+packages = ["python3", "python3.*", "python3-minimal"]
+
+[[product]]
+slug = "nodejs"
+label = "Node.js"
+commands = [["node", "--version"]]
+regex = 'v(\d+\.\d+\.\d+)'
+packages = ["nodejs"]
+
+[[product]]
+slug = "php"
+label = "PHP"
+commands = [["php", "-v"]]
+regex = 'PHP (\d+\.\d+\.\d+)'
+packages = ["php", "php*-cli", "php-cli"]
+
+[[product]]
+slug = "ruby"
+label = "Ruby"
+commands = [["ruby", "--version"]]
+regex = 'ruby (\d+\.\d+\.\d+)'
+packages = ["ruby", "ruby*"]
+
+[[product]]
+slug = "go"
+label = "Go"
+commands = [["go", "version"]]
+regex = 'go(\d+\.\d+(?:\.\d+)?)'
+packages = ["golang", "golang-go", "golang-*-go", "go"]
+
+[[product]]
+slug = "perl"
+label = "Perl"
+commands = [["perl", "-e", "print $^V"]]
+regex = 'v(\d+\.\d+\.\d+)'
+packages = ["perl", "perl-base"]
+
+[[product]]
+slug = "mysql"
+label = "MySQL"
+commands = [["mysqld", "--version"], ["mysql", "--version"]]
+regex = 'Ver (\d+\.\d+\.\d+)'
+exclude = 'MariaDB'
+packages = ["mysql-server*", "mysql-community-server", "mysql-server-core-*"]
+
+[[product]]
+slug = "mariadb"
+label = "MariaDB"
+commands = [["mariadbd", "--version"], ["mysqld", "--version"], ["mariadb", "--version"]]
+regex = '(\d+\.\d+\.\d+)-MariaDB'
+packages = ["mariadb-server*", "MariaDB-server"]
+
+[[product]]
+slug = "postgresql"
+label = "PostgreSQL"
+commands = [["postgres", "--version"], ["psql", "--version"]]
+regex = 'PostgreSQL\)? (\d+(?:\.\d+)?)'
+packages = ["postgresql-[0-9]*", "postgresql-server", "postgresql*-server"]
+
+[[product]]
+slug = "redis"
+label = "Redis"
+commands = [["redis-server", "--version"]]
+regex = 'Redis server v=(\d+\.\d+\.\d+)'
+packages = ["redis", "redis-server"]
+
+[[product]]
+slug = "valkey"
+label = "Valkey"
+commands = [["valkey-server", "--version"], ["redis-server", "--version"]]
+regex = 'Valkey server v=(\d+\.\d+\.\d+)'
+packages = ["valkey", "valkey-server"]
+
+[[product]]
+slug = "mongodb"
+label = "MongoDB"
+commands = [["mongod", "--version"]]
+regex = 'db version v(\d+\.\d+\.\d+)'
+packages = ["mongodb-org*"]
+
+[[product]]
+slug = "sqlite"
+label = "SQLite"
+commands = [["sqlite3", "--version"]]
+regex = '^(\d+\.\d+\.\d+)'
+packages = ["sqlite3", "sqlite", "libsqlite3-0"]
+
+[[product]]
+slug = "nginx"
+label = "nginx"
+commands = [["nginx", "-v"]]
+regex = 'nginx/(\d+\.\d+\.\d+)'
+packages = ["nginx", "nginx-core"]
+
+[[product]]
+slug = "apache-http-server"
+label = "Apache HTTP Server"
+commands = [["apache2", "-v"], ["httpd", "-v"]]
+regex = 'Apache/(\d+\.\d+\.\d+)'
+packages = ["apache2", "httpd"]
+
+[[product]]
+slug = "haproxy"
+label = "HAProxy"
+commands = [["haproxy", "-v"]]
+regex = 'version (\d+\.\d+\.\d+)'
+packages = ["haproxy"]
+
+[[product]]
+slug = "caddy"
+label = "Caddy"
+commands = [["caddy", "version"]]
+regex = 'v(\d+\.\d+\.\d+)'
+packages = ["caddy"]
+
+[[product]]
+slug = "traefik"
+label = "Traefik"
+commands = [["traefik", "version"]]
+regex = 'Version:\s+(\d+\.\d+\.\d+)'
+
+[[product]]
+slug = "squid"
+label = "Squid"
+commands = [["squid", "-v"]]
+regex = 'Version (\d+\.\d+)'
+packages = ["squid"]
+
+[[product]]
+slug = "bind-9"
+label = "BIND 9"
+commands = [["named", "-v"]]
+regex = 'BIND (9\.\d+\.\d+)'
+packages = ["bind9", "bind"]
+
+[[product]]
+slug = "memcached"
+label = "Memcached"
+commands = [["memcached", "-V"]]
+regex = 'memcached (\d+\.\d+\.\d+)'
+packages = ["memcached"]
+
+[[product]]
+slug = "openssl"
+label = "OpenSSL"
+commands = [["openssl", "version"]]
+regex = 'OpenSSL (\d+\.\d+\.\d+)'
+packages = ["openssl", "libssl3*", "openssl-libs"]
+
+[[product]]
+slug = "docker-engine"
+label = "Docker Engine"
+commands = [["docker", "--version"]]
+regex = 'Docker version (\d+\.\d+\.\d+)'
+packages = ["docker-ce", "docker.io", "moby-engine"]
+
+[[product]]
+slug = "kubernetes"
+label = "Kubernetes (kubectl)"
+commands = [["kubectl", "version", "--client"]]
+regex = 'Client Version: v(\d+\.\d+\.\d+)'
+packages = ["kubectl"]
+
+[[product]]
+slug = "terraform"
+label = "Terraform"
+commands = [["terraform", "version"]]
+regex = 'Terraform v(\d+\.\d+\.\d+)'
+packages = ["terraform"]
+
+[[product]]
+slug = "grafana"
+label = "Grafana"
+commands = [["grafana", "--version"], ["grafana-server", "-v"]]
+regex = 'version (\d+\.\d+\.\d+)'
+packages = ["grafana"]
+
+[[product]]
+slug = "zabbix"
+label = "Zabbix"
+commands = [["zabbix_server", "-V"], ["zabbix_agentd", "-V"]]
+regex = '\(Zabbix\) (\d+\.\d+\.\d+)'
+packages = ["zabbix-server-*", "zabbix-agent"]
+
+[[product]]
+slug = "django"
+label = "Django"
+commands = [["python3", "-c", "import django; print('django', django.get_version())"]]
+regex = 'django (\d+\.\d+(?:\.\d+)?)'
+packages = ["python3-django", "Django"]

@@ -1,0 +1,70 @@
+# uun default configuration.
+# Copy to ~/.config/uun/config.toml and override only what you need.
+# That file must not be group/world-writable (it holds commands run via sudo).
+
+[general]
+theme = "default"            # name of a theme in ~/.config/uun/themes or bundled themes
+warn_days = 180              # EoL inside this window -> "SOON" (yellow)
+critical_days = 60           # EoL inside this window -> "CRIT" (red)
+eol_max_age_hours = 24       # TUI refreshes the EoL cache when older than this
+auto_refresh_eol = true
+use_sudo = true              # prefix root-only update commands with sudo when not root
+eol_api = "https://endoflife.date/api/v1/products"
+
+# Each manager: enabled flag and the update command(s) run (in order) when you
+# press `u`. Commands are argv lists, never passed through a shell.
+# "@SUDO" is replaced by "sudo" (or dropped when already root / use_sudo=false).
+
+[managers.apt]
+enabled = true
+update = [["@SUDO", "apt-get", "update"], ["@SUDO", "apt-get", "upgrade"]]
+
+[managers.dnf]
+enabled = true
+update = [["@SUDO", "dnf", "upgrade", "--refresh"]]
+
+[managers.yum]
+enabled = true
+update = [["@SUDO", "yum", "update"]]
+
+[managers.zypper]
+enabled = true
+update = [["@SUDO", "zypper", "refresh"], ["@SUDO", "zypper", "update"]]
+
+[managers.pacman]
+enabled = true
+update = [["@SUDO", "pacman", "-Syu"]]
+
+[managers.flatpak]
+enabled = true
+update = [["flatpak", "update"]]
+
+[managers.snap]
+enabled = true
+update = [["@SUDO", "snap", "refresh"]]
+
+[managers.brew]
+enabled = true
+update = [["brew", "update"], ["brew", "upgrade"]]
+
+[managers.pip]
+# User site / active virtualenv only. uun never upgrades system site-packages
+# (that breaks distro-managed Python, see PEP 668).
+enabled = true
+
+[managers.pipx]
+enabled = true
+update = [["pipx", "upgrade-all"]]
+
+[managers.cargo]
+# Needs `cargo install cargo-update` for outdated detection and upgrades.
+enabled = true
+update = [["cargo", "install-update", "-a"]]
+
+[managers.rustup]
+enabled = true
+update = [["rustup", "update"]]
+
+[managers.npm]
+enabled = true
+update = [["npm", "update", "-g"]]
