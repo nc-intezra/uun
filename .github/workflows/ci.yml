@@ -59,8 +59,13 @@ jobs:
             XDG_DATA_HOME=/home/uuntest/.local/share XDG_STATE_HOME=/home/uuntest/.local/state \
             | sudo -u uuntest tee /home/uuntest/.config/environment.d/90-ci-own-xdg.conf >/dev/null
           as_user systemctl --user daemon-reload
-          as_user systemctl --user show-environment | grep '^XDG_' || true
           as_user systemctl --user enable --now uun-eol-refresh.timer
+          # XDG_CONFIG_HOME comes from the manager's own startup environment,
+          # which outranks environment.d; set-environment outranks both and
+          # (unlike unset-environment) survives reloads.
+          as_user systemctl --user set-environment XDG_CONFIG_HOME=/home/uuntest/.config \
+            XDG_CACHE_HOME=/home/uuntest/.cache
+          as_user systemctl --user show-environment | grep '^XDG_C' || true
           as_user systemctl --user list-timers --all 'uun*'
           as_user systemctl --user is-active uun-eol-refresh.timer
           # run the refresh once now and check how it went
