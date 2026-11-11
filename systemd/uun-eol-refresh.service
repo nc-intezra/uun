@@ -1,18 +1,26 @@
 [Unit]
 Description=uun: refresh end-of-life data from endoflife.date
-Wants=network-online.target
-After=network-online.target
 
 [Service]
 Type=oneshot
 ExecStart=%h/.local/bin/uun --refresh-eol
-# hardening (user service; only needs network + ~/.cache/uun)
+# Creates ~/.cache/uun (mode 0700) if missing.
+CacheDirectory=uun
+UMask=0077
+# Hardening that works in the per-user service manager without a user
+# namespace (seccomp/prctl based). Mount-namespace options such as
+# ProtectSystem=/PrivateTmp= are deliberately absent: in a user unit they make
+# systemd run the service in a user namespace where root is unmapped, so
+# root-owned files appear owned by "nobody" and uun's file-ownership checks
+# (SECURITY.md UUN-03) correctly refuse to run.
 NoNewPrivileges=yes
-PrivateTmp=yes
-ProtectSystem=strict
-ReadWritePaths=%h/.cache/uun
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
-RestrictRealtime=yes
 SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM

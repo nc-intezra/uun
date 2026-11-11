@@ -71,7 +71,6 @@ PY
 find "$R/usr/lib/uun" -name __pycache__ -prune -exec rm -rf {} +
 install -m 755 "$PKG/launcher.sh" "$R/usr/bin/uun"
 sed -e 's#^ExecStart=.*#ExecStart=/usr/bin/uun --refresh-eol#' \
-    -e 's#^ReadWritePaths=.*#CacheDirectory=uun#' \
     "$SRC/systemd/uun-eol-refresh.service" > "$R/usr/lib/systemd/user/uun-eol-refresh.service"
 cp "$SRC/systemd/uun-eol-refresh.timer" "$R/usr/lib/systemd/user/"
 cp "$SRC/README.md" "$SRC/SECURITY.md" "$SRC/LICENSE" "$R/usr/share/doc/uun/"
