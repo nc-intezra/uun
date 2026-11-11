@@ -30,11 +30,11 @@ It's built entirely on open-source software: Python ≥ 3.11 and [Textual](https
 ```bash
 sha256sum -c SHA256SUMS --ignore-missing
 # Ubuntu 24.04+, Debian 12+, Raspberry Pi OS (bookworm+, arm64/armhf)
-sudo apt install ./uun_0.1.0-1_all.deb
+sudo apt install ./uun_0.1.1-1_all.deb
 # Fedora, RHEL/Rocky/Alma 9 (pulls in python3.11+ automatically)
-sudo dnf install ./uun-0.1.0-1.noarch.rpm
+sudo dnf install ./uun-0.1.1-1.noarch.rpm
 # openSUSE Leap 15.6
-sudo zypper install --allow-unsigned-rpm ./uun-0.1.0-1.noarch.rpm
+sudo zypper install --allow-unsigned-rpm ./uun-0.1.1-1.noarch.rpm
 
 systemctl --user enable --now uun-eol-refresh.timer   # daily EoL refresh: as YOUR user, no sudo
 uun --demo                                            # safe preview
