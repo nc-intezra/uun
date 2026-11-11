@@ -36,9 +36,12 @@ esac
 run_as() {
     if [ "$(id -u)" = 0 ] && command -v useradd >/dev/null 2>&1 && command -v su >/dev/null 2>&1; then
         id tester >/dev/null 2>&1 || useradd -m tester
-        # -l: clean login environment. CI runners export XDG_CONFIG_HOME etc.
-        # pointing at their own (private) home, which plain su would keep.
-        su -l tester -s /bin/sh -c "$*"
+        # -l gives a clean login environment, but pam_env still loads
+        # /etc/environment, where GitHub's runner images set XDG_CONFIG_HOME
+        # (and friends) to /home/runner/... -- private to the runner user.
+        # Clear them so uun uses the test user's own default locations.
+        su -l tester -s /bin/sh -c \
+            "unset XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME XDG_STATE_HOME; $*"
     else
         sh -c "$*"
     fi
