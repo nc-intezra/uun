@@ -50,6 +50,10 @@ jobs:
             sudo -u uuntest env -u XDG_CONFIG_HOME -u XDG_CACHE_HOME HOME=/home/uuntest \
               XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" "$@"
           }
+          # The runner image injects XDG_CONFIG_HOME=/home/runner/... into every
+          # user manager (pam_env); a real user's session points at their own
+          # dirs. Clear it for this test user only, not in the unit.
+          as_user systemctl --user unset-environment XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME XDG_STATE_HOME
           as_user systemctl --user enable --now uun-eol-refresh.timer
           as_user systemctl --user list-timers --all 'uun*'
           as_user systemctl --user is-active uun-eol-refresh.timer
