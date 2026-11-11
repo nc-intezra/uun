@@ -48,7 +48,11 @@ jobs:
         run: |
           set -eu
           case "$TAG" in v[0-9]*.[0-9]*.[0-9]*) ;; *) echo "bad tag: $TAG"; exit 1;; esac
-          tagsha=$(gh api "repos/$REPO/commits/refs/tags/$TAG" --jq .sha 2>/dev/null || true)
+          # gh prints the API error body to stdout on failure, so test the exit
+          # status rather than the output (a missing tag is expected pre-publish)
+          if ! tagsha=$(gh api "repos/$REPO/commits/refs/tags/$TAG" --jq .sha 2>/dev/null); then
+            tagsha=""
+          fi
           if [ -n "$REF" ]; then
             sha=$(gh api "repos/$REPO/commits/$REF" --jq .sha)
             if [ -n "$tagsha" ] && [ "$tagsha" != "$sha" ]; then
