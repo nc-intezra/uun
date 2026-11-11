@@ -13,6 +13,7 @@ from textual import on, work
 from textual.app import App, ComposeResult, SuspendNotSupported
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, RichLog, Static
 
@@ -20,6 +21,22 @@ from . import __version__, detect, eol, managers, scan
 from .safety import SAFE_CWD, SHUTDOWN, child_env, clean, stop_background
 from .config import Config
 from .theme import BORDER_MAP, TmuxTheme, list_themes, load_theme
+
+def _display_only(method):
+    """For display refreshes called from timers or background-thread callbacks:
+    if the widgets are already gone (the app is shutting down), there's nothing
+    to display, so do nothing instead of crashing with NoMatches. Seen on a slow
+    (emulated armhf) machine where the 1 s clock tick landed mid-teardown."""
+    def wrapper(self, *args, **kwargs):
+        if getattr(self, "_uun_closing", False):
+            return None
+        try:
+            return method(self, *args, **kwargs)
+        except NoMatches:
+            return None
+    wrapper.__name__, wrapper.__doc__ = method.__name__, method.__doc__
+    return wrapper
+
 
 ACTIONS = {  # bind-key targets usable in theme files
     "refresh": "Rescan", "update": "Update", "update_all": "Update all",
@@ -151,6 +168,7 @@ class UunApp(App):
         self.statuses: list[eol.EolStatus] = []
         self.session_eol: dict | None = None   # fresh EoL data that couldn't be cached
         self.updating = False                  # a package update is running
+        self._uun_closing = False                  # quit in progress: no more display refreshes
         self._scan_thread: threading.Thread | None = None
         self._scan_pending: str | None = None  # "plain" / "eol": rescan requested mid-scan
         self.alts = scan.load_alternatives(cfg.alternatives_file)
@@ -204,10 +222,10 @@ class UunApp(App):
         self.family = ("dnf" if {"rhel", "fedora", "centos"} & set(like) else
                        "zypper" if any("suse" in x for x in like) else
                        "pacman" if "arch" in like else "apt")
-        self.set_interval(30, self.update_titlebar)
+        self._uun_timers = [self.set_interval(30, self.update_titlebar)]
         self.update_titlebar()
         self.tick_clock()
-        self.set_interval(1, self.tick_clock)
+        self._uun_timers.append(self.set_interval(1, self.tick_clock))
         self.query_one("#eol", DataTable).focus()
         self.rescan()
 
@@ -237,6 +255,7 @@ class UunApp(App):
         self.notify(f"theme: {self.tmux.name}", timeout=2, markup=False)
         self.update_titlebar()
 
+    @_display_only
     def update_titlebar(self) -> None:
         age = eol.cache_age_hours() if not self.demo else 2.0
         age_s = "never" if age is None else (f"{age:.0f}h ago" if age < 48 else f"{age / 24:.0f}d ago")
@@ -247,6 +266,7 @@ class UunApp(App):
         txt.append(f"  {host}  │  {os_name}  │  EoL data: {age_s}  │  theme: {self.tmux.name}")
         self.query_one("#titlebar", Static).update(txt)
 
+    @_display_only
     def tick_clock(self) -> None:
         """Upper-right clock; format is tmux-style strftime via `set -g @clock-format`."""
         fmt = self.tmux.options.get("@clock-format", "%Y-%m-%d %H:%M:%S")
@@ -256,6 +276,7 @@ class UunApp(App):
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.query_one("#clock", Static).update(now)
 
+    @_display_only
     def log_line(self, msg: str) -> None:
         self.query_one("#log", RichLog).write(f"{datetime.now():%H:%M:%S} {msg}")
 
@@ -295,6 +316,7 @@ class UunApp(App):
                 except RuntimeError:
                     pass  # app already closed
 
+    @_display_only
     def _scan_finished(self) -> None:
         pending, self._scan_pending = self._scan_pending, None
         if pending:
@@ -334,6 +356,7 @@ class UunApp(App):
         self.call_from_thread(self.log_line, f"scan done: {sum(r.count or 0 for r in self.checks.values())} "
                               f"pending updates, {att} EoL item(s) need attention")
 
+    @_display_only
     def _demo_load(self, demo) -> None:
         self.mgrs, self.checks = demo.managers(), demo.checks()
         self.statuses = scan.evaluate_all(self.cfg, demo.detected(), self.checks, demo.cache())
@@ -343,12 +366,14 @@ class UunApp(App):
         for line in demo.LOG:
             self.log_line(line)
 
+    @_display_only
     def _mgr_placeholders(self) -> None:
         t = self.query_one("#mgr", DataTable)
         t.clear()
         for m in self.mgrs:
             t.add_row(Text(m.name), Text("…"), Text(""), Text("checking…", style="italic"), key=m.name)
 
+    @_display_only
     def render_mgrs(self) -> None:
         t = self.query_one("#mgr", DataTable)
         pal = self.tmux.palette
@@ -365,6 +390,7 @@ class UunApp(App):
         total = sum(r.count or 0 for r in self.checks.values())
         self.query_one("#mgr-pane").border_subtitle = f"{total} pending"
 
+    @_display_only
     def render_eol(self) -> None:
         if not self.is_mounted:
             return
@@ -404,6 +430,7 @@ class UunApp(App):
             return None
         return self.statuses[t.cursor_row]
 
+    @_display_only
     def render_detail(self) -> None:
         if not self.is_mounted:
             return
@@ -471,8 +498,12 @@ class UunApp(App):
                         "Quit again once it has finished.",
                         severity="warning", timeout=6, markup=False)
             return
-        # Stop read-only background checks now (kills their process groups) so
-        # nothing keeps the process alive after the TUI closes.
+        # Stop timers and display refreshes first, then read-only background
+        # checks (kills their process groups), so nothing touches widgets
+        # during teardown or keeps the process alive afterwards.
+        self._uun_closing = True
+        for t in getattr(self, "_uun_timers", []):
+            t.stop()
         stop_background(grace=1.0)
         self.exit()
 

@@ -95,5 +95,45 @@ class QuitWhileScanning(unittest.TestCase):
         self.assertEqual(live, [], "check process left running after quit")
 
 
+
+class ShutdownRace(unittest.TestCase):
+    """The app's own timers firing during teardown must not crash (CI armhf
+    failure: NoMatches '#clock' from the 1 s clock tick). The app's timers are
+    made to tick every 1 ms to make the race window large and deterministic."""
+
+    def _run(self, quit_with_q):
+        from unittest import mock
+
+        from textual.app import App
+
+        from uun.app import UunApp
+        from uun.config import load_config
+
+        def fast_interval(self, interval, callback, *a, **k):
+            return App.set_interval(self, 0.001, callback, *a, **k)
+
+        async def once():
+            app = UunApp(load_config(), demo=True)
+            async with app.run_test(size=(120, 40)) as pilot:
+                await pilot.pause(0.3)
+                if quit_with_q:
+                    # direct call: pilot.press() waits for idle, which a 1 ms
+                    # clock never allows
+                    await app.action_quit()
+        with mock.patch.object(UunApp, "set_interval", fast_interval):
+            for _ in range(5):
+                start = time.monotonic()
+                asyncio.run(asyncio.wait_for(once(), 30))
+                self.assertLess(time.monotonic() - start, 15)
+
+    def test_teardown_with_pending_ticks(self):
+        self._run(quit_with_q=False)
+
+    def test_quit_with_pending_ticks(self):
+        try:
+            self._run(quit_with_q=True)
+        finally:
+            safety.SHUTDOWN.clear()
+
 if __name__ == "__main__":
     unittest.main()
