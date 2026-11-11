@@ -1,0 +1,18 @@
+[Unit]
+Description=uun: refresh end-of-life data from endoflife.date
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/uun --refresh-eol
+# hardening (user service; only needs network + ~/.cache/uun)
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=%h/.cache/uun
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
