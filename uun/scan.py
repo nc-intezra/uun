@@ -9,6 +9,7 @@ from pathlib import Path
 
 from . import detect, eol, managers
 from .config import Config
+from .safety import clean, read_trusted
 
 STATE_ORDER = {"EOL": 0, "CRIT": 1, "SOON": 2, "UNKNOWN": 3, "OK": 4}
 
@@ -45,7 +46,8 @@ def evaluate_all(cfg: Config, found: list[detect.Detected], checks: dict,
         if d.slug in seen:
             continue
         seen.add(d.slug)
-        prod = products.get(d.slug)
+        raw = products.get(d.slug)
+        prod = eol.normalize_product(raw, d.slug) if raw is not None else None
         st = eol.evaluate(d.slug, d.version, d.source, prod, cfg.warn_days, cfg.critical_days)
         if st.label == d.slug:
             st.label = d.label
@@ -56,7 +58,7 @@ def evaluate_all(cfg: Config, found: list[detect.Detected], checks: dict,
 
 
 def load_alternatives(path: Path) -> dict:
-    return tomllib.loads(path.read_text())
+    return tomllib.loads(read_trusted(path))
 
 
 def report(cfg: Config, as_json: bool = False) -> int:
@@ -79,7 +81,7 @@ def report(cfg: Config, as_json: bool = False) -> int:
         for k, v in checks.items():
             cnt = "?" if v.count is None else v.count
             sec = "" if not v.security else f" ({v.security} security)"
-            print(f"  {k:<8} {cnt:>4} pending{sec}  {v.error or v.note}")
+            print(f"  {k:<8} {cnt:>4} pending{sec}  {clean(v.error or v.note)}")
         print("\n== End-of-life ==")
         for s in statuses:
             days = "" if s.days_left is None else f"{s.days_left:>5}d"

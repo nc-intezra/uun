@@ -16,39 +16,86 @@ from pathlib import Path
 
 from . import __version__
 from .config import EOL_CACHE
+from .safety import clean, clean_date, clean_url
 
 _SLUG = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+_RELNAME = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._+-]{0,31}$")
 MAX_BYTES = 2_000_000
+DEADLINE = 45.0          # whole-request budget; per-socket timeouts alone allow slow-drip hangs
+MAX_RELEASES = 500
+
+
+class _HttpsOnlyRedirect(urllib.request.HTTPRedirectHandler):
+    """urllib follows https -> http redirects by default; refuse any downgrade."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if urllib.parse.urlsplit(newurl).scheme != "https":
+            raise urllib.error.HTTPError(newurl, code, "refusing non-HTTPS redirect", headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_OPENER = urllib.request.build_opener(_HttpsOnlyRedirect)
+
+
+def normalize_product(result, fallback_label: str) -> dict | None:
+    """Strict allow-list of fields/types. Everything shown in the terminal later
+    passes through here, both fresh from the network and when read from cache."""
+    if not isinstance(result, dict) or not isinstance(result.get("releases"), list):
+        return None
+    releases = []
+    for rel in result["releases"][:MAX_RELEASES]:
+        if not isinstance(rel, dict) or not isinstance(rel.get("name"), str) \
+                or not _RELNAME.match(rel["name"]):
+            continue
+        latest = rel.get("latest")
+        if isinstance(latest, dict):
+            latest = latest.get("name")
+        releases.append({
+            "name": rel["name"],
+            "releaseDate": clean_date(rel.get("releaseDate")),
+            "eolFrom": clean_date(rel.get("eolFrom")),
+            "isLts": rel.get("isLts") is True,
+            "isEol": rel.get("isEol") is True,
+            "latest": latest if isinstance(latest, str) and _RELNAME.match(latest) else None,
+        })
+    links = result.get("links")
+    html = result.get("html")
+    if isinstance(links, dict):
+        html = links.get("html")
+    return {"label": clean(result.get("label", fallback_label), 40),
+            "releases": releases, "html": clean_url(html)}
 
 
 def _fetch_one(api: str, slug: str, timeout: float) -> tuple[str, dict | None, str | None]:
     if not _SLUG.match(slug):
         return slug, None, "invalid product slug"
     url = f"{api.rstrip('/')}/{urllib.parse.quote(slug)}"
+    if not url.startswith("https://"):
+        return slug, None, "refusing non-HTTPS API URL"
     req = urllib.request.Request(url, headers={"User-Agent": f"uun/{__version__}",
                                                "Accept": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:  # TLS verified by default
-            body = r.read(MAX_BYTES + 1)
-        if len(body) > MAX_BYTES:
-            return slug, None, "response too large"
-        data = json.loads(body)
-        result = data["result"]
-        releases = [
-            {k: rel.get(k) for k in ("name", "label", "releaseDate", "isLts", "isEol",
-                                     "eolFrom", "isEoas", "eoasFrom", "isMaintained")}
-            | {"latest": (rel.get("latest") or {}).get("name")}
-            for rel in result["releases"] if isinstance(rel, dict) and isinstance(rel.get("name"), str)
-        ]
-        links = result.get("links") or {}
-        return slug, {"label": str(result.get("label", slug)), "releases": releases,
-                      "html": links.get("html") if isinstance(links, dict) else None}, None
+        start = time.monotonic()
+        chunks, total = [], 0
+        with _OPENER.open(req, timeout=timeout) as r:  # TLS verified by default
+            while chunk := r.read(65536):
+                total += len(chunk)
+                if total > MAX_BYTES:
+                    return slug, None, "response too large"
+                if time.monotonic() - start > DEADLINE:
+                    return slug, None, "response too slow"
+                chunks.append(chunk)
+        data = json.loads(b"".join(chunks))
+        prod = normalize_product(data.get("result") if isinstance(data, dict) else None, slug)
+        if prod is None:
+            return slug, None, "bad data: unexpected schema"
+        return slug, prod, None
     except urllib.error.HTTPError as e:
-        return slug, None, f"HTTP {e.code}"
+        return slug, None, clean(f"HTTP {e.code} {e.msg}", 80)
     except (urllib.error.URLError, TimeoutError, OSError) as e:
-        return slug, None, str(getattr(e, "reason", e))
-    except (ValueError, KeyError, TypeError) as e:
-        return slug, None, f"bad data: {e}"
+        return slug, None, clean(getattr(e, "reason", e), 80)
+    except (ValueError, KeyError, TypeError, AttributeError) as e:
+        return slug, None, clean(f"bad data: {e}", 80)
 
 
 def refresh(api: str, slugs: list[str], cache: Path = EOL_CACHE, timeout: float = 15) -> dict:
@@ -63,7 +110,7 @@ def refresh(api: str, slugs: list[str], cache: Path = EOL_CACHE, timeout: float 
             else:
                 errors[slug] = err or "unknown error"
     out = {"fetched_at": time.time(), "products": products, "errors": errors}
-    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd, tmp = tempfile.mkstemp(dir=cache.parent, prefix=".eol-", suffix=".json")
     with os.fdopen(fd, "w") as f:
         json.dump(out, f)
@@ -72,11 +119,34 @@ def refresh(api: str, slugs: list[str], cache: Path = EOL_CACHE, timeout: float 
 
 
 def load_cache(cache: Path = EOL_CACHE) -> dict:
+    """Load and re-validate the cache; a tampered or corrupt cache is ignored
+    rather than crashing the TUI or injecting text into the terminal."""
     try:
-        data = json.loads(cache.read_text())
-        return data if isinstance(data, dict) else {}
+        fd = os.open(cache, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError:
+        return {}
+    try:
+        st = os.fstat(fd)
+        if st.st_uid not in (0, os.getuid()) or st.st_mode & 0o022 or st.st_size > 20 * MAX_BYTES:
+            return {}
+        with os.fdopen(fd, "rb", closefd=False) as f:
+            data = json.loads(f.read())
     except (OSError, ValueError):
         return {}
+    finally:
+        os.close(fd)
+    if not isinstance(data, dict) or not isinstance(data.get("products"), dict):
+        return {}
+    products = {}
+    for slug, raw in data["products"].items():
+        if isinstance(slug, str) and _SLUG.match(slug):
+            prod = normalize_product(raw, slug)
+            if prod is not None:
+                products[slug] = prod
+    ts = data.get("fetched_at")
+    errors = data.get("errors") if isinstance(data.get("errors"), dict) else {}
+    return {"fetched_at": ts if isinstance(ts, (int, float)) else None, "products": products,
+            "errors": {clean(k, 64): clean(v, 80) for k, v in errors.items()}}
 
 
 def cache_age_hours(cache: Path = EOL_CACHE) -> float | None:
@@ -94,7 +164,7 @@ def clean_version(v: str) -> str:
     """'1:10.11.6-0+deb12u1' -> '10.11.6'; 'v20.11.1' -> '20.11.1'"""
     v = v.split(":", 1)[1] if re.match(r"^\d+:", v) else v
     m = _VER.search(v)
-    return m.group(1) if m else v
+    return m.group(1) if m else clean(v, 40)
 
 
 def match_release(version: str, releases: list[dict]) -> dict | None:
@@ -145,7 +215,8 @@ class EolStatus:
 def evaluate(slug: str, installed: str, source: str, product: dict | None,
              warn_days: int, critical_days: int, today: date | None = None) -> EolStatus:
     today = today or date.today()
-    st = EolStatus(slug=slug, label=(product or {}).get("label", slug),
+    installed, source = clean(installed, 40), clean(source, 80)
+    st = EolStatus(slug=slug, label=clean((product or {}).get("label", slug), 40),
                    installed=installed, source=source)
     if not product:
         st.note = "no EoL data cached (run: uun --refresh-eol)"

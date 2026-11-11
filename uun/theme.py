@@ -15,6 +15,7 @@ and "default" (leave unset).
 from __future__ import annotations
 
 import shlex
+import stat
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -74,6 +75,8 @@ def parse_style(value: str) -> dict:
             out["attrs"].append({"underscore": "underline"}.get(part, part))
     return out
 
+
+MAX_THEME_BYTES = 256 * 1024
 
 BORDER_MAP = {"single": "solid", "double": "double", "heavy": "heavy",
               "rounded": "round", "simple": "ascii", "ascii": "ascii", "none": "none",
@@ -219,7 +222,15 @@ def _parse_file(theme: TmuxTheme, path: Path, depth: int) -> None:
     if depth > 8:
         theme.errors.append(f"{path}: source-file nesting too deep")
         return
-    for lineno, raw in enumerate(path.read_text().splitlines(), 1):
+    try:
+        st = path.stat()
+        if not stat.S_ISREG(st.st_mode) or st.st_size > MAX_THEME_BYTES:
+            raise ValueError("not a regular file or larger than 256 KiB")
+        text = path.read_text(errors="replace")
+    except (OSError, ValueError) as e:
+        theme.errors.append(f"{path}: {e}")
+        return
+    for lineno, raw in enumerate(text.splitlines(), 1):
         try:
             words = shlex.split(raw, comments=True)
         except ValueError as e:

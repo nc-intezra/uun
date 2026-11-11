@@ -4,11 +4,12 @@ from __future__ import annotations
 import os
 import platform
 import re
-import shutil
 import subprocess
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from .safety import SAFE_CWD, child_env, clean, read_trusted, which
 
 EXTRA_PATH = ["/usr/sbin", "/sbin", "/usr/local/sbin", "/usr/local/bin", "/snap/bin"]
 
@@ -40,7 +41,7 @@ class Detected:
 
 
 def load_specs(path: Path) -> list[ProductSpec]:
-    data = tomllib.loads(path.read_text())
+    data = tomllib.loads(read_trusted(path))
     specs = []
     for p in data.get("product", []):
         cmds = p.get("commands", [])
@@ -53,19 +54,21 @@ def load_specs(path: Path) -> list[ProductSpec]:
 
 
 def _env() -> dict:
-    env = {k: v for k, v in os.environ.items() if k in ("HOME", "USER", "PATH", "TERM")}
-    env["PATH"] = os.pathsep.join([env.get("PATH", "/usr/bin:/bin"), *EXTRA_PATH])
-    env["LC_ALL"] = "C"
+    full = child_env(extra_dirs=tuple(EXTRA_PATH))
+    env = {k: v for k, v in full.items() if k in ("HOME", "USER", "PATH", "TERM", "LC_ALL")}
     return env
 
 
 def _run_probe(argv: list[str], env: dict) -> str | None:
-    exe = shutil.which(argv[0], path=env["PATH"])
+    exe = which(argv[0], env["PATH"].split(os.pathsep))
     if not exe:
         return None
     try:
+        # cwd=/ : `python3 -c "import django"` must not import ./django.py from
+        # whatever directory the user launched uun in.
         r = subprocess.run([exe, *argv[1:]], capture_output=True, text=True, timeout=8,
-                           env=env, stdin=subprocess.DEVNULL)
+                           env=env, stdin=subprocess.DEVNULL, cwd=SAFE_CWD,
+                           errors="replace")
     except (OSError, subprocess.TimeoutExpired):
         return None
     return (r.stdout or "") + "\n" + (r.stderr or "")
@@ -93,9 +96,9 @@ def detect_os() -> list[Detected]:
     if oid == "centos" and "stream" in osr.get("NAME", "").lower():
         slug = "centos-stream"
     if slug and ver:
-        found.append(Detected(slug, osr.get("NAME", slug), ver, "/etc/os-release"))
+        found.append(Detected(slug, clean(osr.get("NAME", slug), 40), clean(ver, 20), "/etc/os-release"))
     if platform.system() == "Linux":
-        found.append(Detected("linux", "Linux kernel", platform.release(), "uname -r"))
+        found.append(Detected("linux", "Linux kernel", clean(platform.release(), 40), "uname -r"))
     return found
 
 

@@ -4,12 +4,12 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
-import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from .safety import SAFE_CWD, child_env, clean, sudo_path, which
 
 
 @dataclass
@@ -21,19 +21,17 @@ class CheckResult:
     error: str = ""
 
 
-def _env() -> dict:
-    env = dict(os.environ)
-    env["LC_ALL"] = "C"
-    return env
-
-
 def run(argv: list[str], timeout: int = 300, ok=(0,)) -> tuple[int, str, str]:
-    exe = shutil.which(argv[0])
+    # Executables come only from trusted PATH dirs (no '.', relative or
+    # world-writable entries) and run with cwd=/ so per-directory config such
+    # as ./.npmrc, ./.cargo/config.toml or ./pip/ in the launch dir is ignored.
+    exe = which(argv[0])
     if not exe:
-        return 127, "", f"{argv[0]}: not found"
+        return 127, "", f"{argv[0]}: not found in trusted PATH"
     try:
         r = subprocess.run([exe, *argv[1:]], capture_output=True, text=True, timeout=timeout,
-                           env=_env(), stdin=subprocess.DEVNULL)
+                           env=child_env(), stdin=subprocess.DEVNULL, cwd=SAFE_CWD,
+                           errors="replace")
         return r.returncode, r.stdout, r.stderr
     except subprocess.TimeoutExpired:
         return 124, "", f"timed out after {timeout}s"
@@ -45,7 +43,7 @@ def _first(text: str, limit: int = 160) -> str:
     """First non-empty line of a tool's error output, trimmed."""
     for line in text.splitlines():
         if line.strip():
-            return line.strip()[:limit]
+            return clean(line.strip(), limit)
     return ""
 
 
@@ -125,7 +123,7 @@ def check_zypper() -> CheckResult:
 
 def check_pacman() -> CheckResult:
     res = CheckResult()
-    if shutil.which("checkupdates"):
+    if which("checkupdates"):
         rc, out, err = run(["checkupdates"])
         if rc == 2:
             out = ""
@@ -140,7 +138,7 @@ def check_pacman() -> CheckResult:
         if len(p) >= 4 and p[2] == "->":
             res.pending[p[0]] = p[3]
     res.count = len(res.pending)
-    if shutil.which("arch-audit"):
+    if which("arch-audit"):
         rc, out, _ = run(["arch-audit", "-u"])
         res.security = len([ln for ln in out.splitlines() if ln.strip()])
     return res
@@ -187,8 +185,16 @@ def check_brew() -> CheckResult:
     return res
 
 
+_PKG_NAME = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,200}[A-Za-z0-9])?$")
+
+
 def _pip_base() -> list[str]:
-    return [sys.executable if os.environ.get("VIRTUAL_ENV") else "python3", "-m", "pip"]
+    venv = os.environ.get("VIRTUAL_ENV")
+    if venv:
+        py = os.path.join(venv, "bin", "python")
+        if os.path.isabs(py) and os.access(py, os.X_OK):
+            return [py, "-m", "pip"]
+    return ["python3", "-m", "pip"]
 
 
 def _pip_scope() -> list[str]:
@@ -203,7 +209,9 @@ def check_pip() -> CheckResult:
         res.error = err.strip().splitlines()[-1][:200] if err.strip() else f"exit {rc}"
         return res
     for p in json.loads(out or "[]"):
-        res.pending[p["name"]] = p.get("latest_version", "")
+        name = str(p.get("name", ""))
+        if _PKG_NAME.match(name):          # never let a dist name become a pip option
+            res.pending[name] = str(p.get("latest_version", ""))
     res.count = len(res.pending)
     return res
 
@@ -216,7 +224,7 @@ def check_pipx() -> CheckResult:
 
 def check_cargo() -> CheckResult:
     res = CheckResult()
-    if not shutil.which("cargo-install-update"):
+    if not which("cargo-install-update"):
         res.note = "needs: cargo install cargo-update"
         return res
     rc, out, err = run(["cargo", "install-update", "--list"], timeout=180)
@@ -289,29 +297,50 @@ def available(cfg_managers: dict) -> list[Manager]:
     for m in MANAGERS:
         if not cfg_managers.get(m.name, {}).get("enabled", True):
             continue
-        if not shutil.which(m.binary):
+        if not which(m.binary):
             continue
         # dnf supersedes yum (yum is usually a symlink to dnf)
-        if m.name == "yum" and shutil.which("dnf"):
+        if m.name == "yum" and which("dnf"):
             continue
         found.append(m)
     return found
 
 
+class CommandUnavailable(RuntimeError):
+    pass
+
+
 def update_commands(m: Manager, cfg_managers: dict, use_sudo: bool,
                     pending: dict[str, str] | None = None) -> list[list[str]]:
+    """Build argv lists with argv[0] resolved to an absolute, trusted path
+    (shown verbatim in the confirmation dialog)."""
     if m.name == "pip":
-        pkgs = sorted((pending or {}).keys())
+        pkgs = sorted(p for p in (pending or {}) if _PKG_NAME.match(p))
         if not pkgs:
             return []
-        return [[*_pip_base(), "install", "--upgrade", *_pip_scope(), *pkgs]]
-    cmds = cfg_managers.get(m.name, {}).get("update", [])
-    sudo = ["sudo"] if use_sudo and os.geteuid() != 0 else []
+        cmds = [[*_pip_base(), "install", "--upgrade", *_pip_scope(), "--", *pkgs]]
+    else:
+        root = os.geteuid() == 0
+        cmds = []
+        for c in cfg_managers.get(m.name, {}).get("update", []):
+            if not isinstance(c, list) or not all(isinstance(w, str) for w in c):
+                raise CommandUnavailable(f"{m.name}: update commands must be lists of strings")
+            argv = []
+            for w in c:
+                if w == "@SUDO":
+                    if use_sudo and not root:
+                        s = sudo_path()
+                        if not s:
+                            raise CommandUnavailable("no trusted root-owned setuid sudo found")
+                        argv.append(s)
+                else:
+                    argv.append(w)
+            if argv:
+                cmds.append(argv)
     out = []
-    for c in cmds:
-        argv = []
-        for w in c:
-            argv.extend(sudo if w == "@SUDO" else [w])
-        if argv:
-            out.append(argv)
+    for argv in cmds:
+        exe = argv[0] if os.path.isabs(argv[0]) else which(argv[0])
+        if not exe:
+            raise CommandUnavailable(f"{argv[0]} not found in a trusted PATH directory")
+        out.append([exe, *argv[1:]])
     return out

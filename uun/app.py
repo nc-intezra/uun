@@ -16,6 +16,7 @@ from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, RichLog, Static
 
 from . import __version__, detect, eol, managers, scan
+from .safety import SAFE_CWD, child_env, clean
 from .config import Config
 from .theme import BORDER_MAP, TmuxTheme, list_themes, load_theme
 
@@ -193,7 +194,7 @@ class UunApp(App):
         for e in self.tmux.errors:
             self.log_line(f"theme: {e}")
         osr = detect.os_release()
-        self.os_name = osr.get("PRETTY_NAME", "unknown OS")
+        self.os_name = clean(osr.get("PRETTY_NAME", "unknown OS"), 48)
         like = (osr.get("ID", "") + " " + osr.get("ID_LIKE", "")).split()
         self.family = ("dnf" if {"rhel", "fedora", "centos"} & set(like) else
                        "zypper" if any("suse" in x for x in like) else
@@ -228,7 +229,7 @@ class UunApp(App):
         i = (self.theme_names.index(self.tmux.name) + 1) % len(self.theme_names) \
             if self.tmux.name in self.theme_names else 0
         self.apply_tmux(load_theme(self.theme_names[i]))
-        self.notify(f"theme: {self.tmux.name}", timeout=2)
+        self.notify(f"theme: {self.tmux.name}", timeout=2, markup=False)
         self.update_titlebar()
 
     def update_titlebar(self) -> None:
@@ -301,7 +302,7 @@ class UunApp(App):
         t = self.query_one("#mgr", DataTable)
         t.clear()
         for m in self.mgrs:
-            t.add_row(m.name, "…", "", Text("checking…", style="italic"), key=m.name)
+            t.add_row(Text(m.name), Text("…"), Text(""), Text("checking…", style="italic"), key=m.name)
 
     def render_mgrs(self) -> None:
         t = self.query_one("#mgr", DataTable)
@@ -337,8 +338,11 @@ class UunApp(App):
                        Text(s.inbound, style="dim") if s.inbound else
                        Text("none", style=pal["crit"]) if s.needs_attention else Text(""))
             inst = s.installed if len(s.installed) <= 12 else s.installed[:11] + "…"
-            t.add_row(label, Text(s.label, style="bold"), inst, s.cycle or "-",
-                      str(s.eol or "-"), Text(days, style=c), inbound, s.upgrade_to or "", key=s.slug)
+            # Every cell is a Text: DataTable parses plain str as markup, which
+            # would let remote EoL data inject styles or [@click=...] actions.
+            t.add_row(label, Text(s.label, style="bold"), Text(inst), Text(s.cycle or "-"),
+                      Text(str(s.eol or "-")), Text(days, style=c), inbound,
+                      Text(s.upgrade_to or ""), key=s.slug)
         if self.statuses:
             t.move_cursor(row=min(row, len(self.statuses) - 1))
         att = sum(s.needs_attention for s in self.statuses)
@@ -412,8 +416,9 @@ class UunApp(App):
                      if a.get("install", {}).get(self.family)), None)
         text = hint or (alts[0]["url"] if alts else s.url)
         if text:
+            text = clean(text, 300)
             self.copy_to_clipboard(text)
-            self.notify(f"copied: {text}", timeout=3)
+            self.notify(f"copied: {text}", timeout=3, markup=False)
 
     def action_toggle_log(self) -> None:
         self.query_one("#log-pane").toggle_class("hidden")
@@ -424,7 +429,13 @@ class UunApp(App):
     # ------------------------------------------------------------ updates
     def _cmds_for(self, m: managers.Manager) -> list[list[str]]:
         r = self.checks.get(m.name)
-        return managers.update_commands(m, self.cfg.managers, self.cfg.use_sudo, r.pending if r else None)
+        try:
+            return managers.update_commands(m, self.cfg.managers, self.cfg.use_sudo,
+                                            r.pending if r else None)
+        except managers.CommandUnavailable as e:
+            self.log_line(f"{m.name}: not updating: {e}")
+            self.notify(f"{m.name}: {e}", severity="error", timeout=5, markup=False)
+            return []
 
     def action_update(self) -> None:
         t = self.query_one("#mgr", DataTable)
@@ -460,7 +471,7 @@ class UunApp(App):
             with self.suspend():
                 for c in cmds:
                     print(f"\n\033[1m$ {' '.join(c)}\033[0m", flush=True)
-                    rc = subprocess.call(c)
+                    rc = subprocess.call(c, cwd=SAFE_CWD, env=child_env(locale_c=False))
                     if rc != 0:
                         print(f"\n\033[31mcommand failed (exit {rc}); stopping\033[0m")
                         break
@@ -474,12 +485,13 @@ class UunApp(App):
     @work(thread=True, exclusive=True, group="update")
     def _run_streaming(self, cmds: list[list[str]]) -> None:
         for c in cmds:
-            c = ["sudo", "-n", *c[1:]] if c and c[0] == "sudo" else c
+            c = [c[0], "-n", *c[1:]] if c and os.path.basename(c[0]) == "sudo" else c
             self.call_from_thread(self.log_line, "$ " + " ".join(c))
             p = subprocess.Popen(c, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                 stdin=subprocess.DEVNULL, env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"})
+                                 errors="replace", stdin=subprocess.DEVNULL, cwd=SAFE_CWD,
+                                 env={**child_env(locale_c=False), "DEBIAN_FRONTEND": "noninteractive"})
             for line in p.stdout:
-                self.call_from_thread(self.log_line, line.rstrip())
+                self.call_from_thread(self.log_line, clean(line.rstrip(), 400))
             if p.wait() != 0:
                 self.call_from_thread(self.log_line, f"failed (exit {p.returncode})")
                 break

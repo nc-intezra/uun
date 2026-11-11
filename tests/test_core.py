@@ -84,7 +84,9 @@ class ManagerTests(unittest.TestCase):
         cfg = {"apt": {"update": [["@SUDO", "apt-get", "upgrade"]]}}
         m = next(x for x in managers.MANAGERS if x.name == "apt")
         cmds = managers.update_commands(m, cfg, use_sudo=False)
-        self.assertEqual(cmds, [["apt-get", "upgrade"]])
+        self.assertEqual(len(cmds), 1)
+        self.assertTrue(os.path.isabs(cmds[0][0]) and cmds[0][0].endswith("/apt-get"))
+        self.assertEqual(cmds[0][1:], ["upgrade"])
 
     def test_pip_never_touches_system_site(self):
         m = next(x for x in managers.MANAGERS if x.name == "pip")
@@ -96,12 +98,15 @@ class ManagerTests(unittest.TestCase):
 
 class SafetyTests(unittest.TestCase):
     def test_world_writable_config_refused(self):
-        with tempfile.NamedTemporaryFile() as f:
-            os.chmod(f.name, 0o666)
+        with tempfile.TemporaryDirectory() as d:
+            os.chmod(d, 0o700)
+            f = Path(d, "config.toml")
+            f.write_text("[general]\n")
+            os.chmod(f, 0o666)
             with self.assertRaises(UnsafeFileError):
-                assert_safe(Path(f.name))
-            os.chmod(f.name, 0o600)
-            assert_safe(Path(f.name))
+                assert_safe(f)
+            os.chmod(f, 0o600)
+            assert_safe(f)
 
 
 if __name__ == "__main__":
