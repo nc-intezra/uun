@@ -51,9 +51,15 @@ jobs:
               XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" "$@"
           }
           # The runner image injects XDG_CONFIG_HOME=/home/runner/... into every
-          # user manager (pam_env); a real user's session points at their own
-          # dirs. Clear it for this test user only, not in the unit.
-          as_user systemctl --user unset-environment XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME XDG_STATE_HOME
+          # user manager, re-applied on each reload; a real user's session points
+          # at their own dirs. Override it for this test user via environment.d
+          # (the supported per-user mechanism), not in the unit.
+          sudo -u uuntest mkdir -p /home/uuntest/.config/environment.d
+          printf '%s\n' XDG_CONFIG_HOME=/home/uuntest/.config XDG_CACHE_HOME=/home/uuntest/.cache \
+            XDG_DATA_HOME=/home/uuntest/.local/share XDG_STATE_HOME=/home/uuntest/.local/state \
+            | sudo -u uuntest tee /home/uuntest/.config/environment.d/90-ci-own-xdg.conf >/dev/null
+          as_user systemctl --user daemon-reload
+          as_user systemctl --user show-environment | grep '^XDG_' || true
           as_user systemctl --user enable --now uun-eol-refresh.timer
           as_user systemctl --user list-timers --all 'uun*'
           as_user systemctl --user is-active uun-eol-refresh.timer
