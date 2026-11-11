@@ -12,7 +12,13 @@ log "install $pkg ($kind)"
 case $kind in
     deb)
         export DEBIAN_FRONTEND=noninteractive
-        apt-get update -qq
+        # Fail clearly if the mirrors are unreachable (otherwise apt reports
+        # a misleading "held broken packages").
+        n=0
+        until apt-get update -qq -o APT::Update::Error-Mode=any; do
+            n=$((n + 1)); [ "$n" -lt 3 ] || { echo "FAIL: apt mirrors unreachable"; exit 1; }
+            sleep 10
+        done
         apt-get install -y -qq "$pkg"
         ;;
     rpm-dnf)
