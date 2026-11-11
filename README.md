@@ -1,0 +1,118 @@
+# uun — universal update notifier
+
+A terminal UI that, in one screen:
+
+1. **Updates everything repo-based**: apt, dnf/yum, zypper, pacman, flatpak, snap, Homebrew, pip (user/venv), pipx, cargo (via `cargo-update`), rustup, npm global.
+2. **Tracks end-of-life dates** for your OS, kernel, language runtimes, databases and servers, using the open [endoflife.date](https://endoflife.date) API. A systemd user timer (or cron) refreshes the data daily.
+3. **Lists upcoming EoLs**, sorted by urgency: `EOL` → `CRIT` → `SOON` → `OK`.
+4. **Suggests alternatives** when something is EoL or close to it **and no supported version is coming from your package managers** (for example MySQL → MariaDB / Percona / PostgreSQL, Redis → Valkey, CentOS → Rocky / Alma, Terraform → OpenTofu). It also shows the upstream upgrade path.
+5. **Live clock** in the upper-right corner (ISO 8601 date + `hh:mm:ss`, updated every second; format and colours themable).
+6. **Themes in tmux syntax**: `set -g status-style "bg=colour235,fg=colour250"`, `pane-border-lines`, `source-file`, `bind-key`, `@user-options`.
+
+It's built entirely on open-source software: Python ≥ 3.11 and [Textual](https://github.com/Textualize/textual) (MIT) for the TUI. uun itself is MIT-licensed.
+
+![Dashboard](docs/previews/01-dashboard-default.png)
+
+<details><summary>More previews (demo data)</summary>
+
+| | |
+|---|---|
+| ![MySQL EoL, no update inbound](docs/previews/02-mysql-no-update-inbound.png) | ![Redis → Valkey, nord](docs/previews/03-redis-alternatives-nord.png) |
+| ![Update all, gruvbox](docs/previews/04-update-all-confirm-gruvbox.png) | ![Update apt, solarized](docs/previews/05-update-apt-solarized.png) |
+| ![Help, dracula](docs/previews/06-help-dracula.png) | ![16-colour mono](docs/previews/07-python-mono-16colour.png) |
+
+</details>
+
+## Install
+
+```bash
+./install.sh            # pipx (or a private venv) + daily EoL refresh timer
+uun --demo              # safe preview on canned data: try themes and keys
+uun                     # the real thing
+```
+
+## Keys
+
+| key | action | | key | action |
+|---|---|---|---|---|
+| `r` | rescan | | `c` | copy install hint / URL (OSC 52) |
+| `u` | update selected manager | | `t` | cycle themes live |
+| `U` | update all managers with pending updates | | `l` | toggle log |
+| `e` | force EoL data refresh | | `?` | help |
+| `tab` | switch pane | | `q` | quit |
+
+Before an update runs, you see the **exact argv** of every command and confirm with `y`. The TUI then suspends so you can answer sudo and package-manager prompts, and it rescans when you return.
+
+## How "no update inbound" is decided
+
+For each detected product, uun:
+1. Matches the installed version to an endoflife.date release cycle (longest prefix, e.g. `5.15.0-160-generic` → `5.15`).
+2. Looks for a pending package-manager update for that product's packages (`packages` globs in `products.toml`, e.g. `mysql-server*`).
+3. Counts the update as a **fix** only if the pending version lands in a cycle that is still supported beyond `warn_days`. A patch inside a dead cycle doesn't count.
+4. If the product is `EOL`/`CRIT`/`SOON` and no fix is inbound, it shows the alternatives from `alternatives.toml` with distro-specific install hints. **It never installs alternatives itself**, because they usually need a data migration.
+
+## Configuration (`~/.config/uun/`)
+
+| file | purpose |
+|---|---|
+| `config.toml` | theme, `warn_days` (180), `critical_days` (60), cache age, per-manager enable + update commands |
+| `products.toml` | what to probe (copy from `uun/data/` to extend: slug, argv, version regex, package globs) |
+| `alternatives.toml` | your own alternative suggestions |
+| `themes/*.conf` | tmux-syntax themes |
+
+Update commands are argv lists (never a shell). `@SUDO` expands to `sudo` only when you're not root:
+
+```toml
+[managers.apt]
+update = [["@SUDO", "apt-get", "update"], ["@SUDO", "apt-get", "dist-upgrade"]]
+[managers.snap]
+enabled = false
+```
+
+## Theming (tmux syntax)
+
+```tmux
+# ~/.config/uun/themes/mine.conf
+source-file nord.conf                     # inherit, like tmux
+set -g @textual-base nord                 # any Textual built-in as a base
+set -g status-style "bg=colour236,fg=colour250"
+set -g @status-key-style "bg=colour39,fg=colour16"
+set -g status-position top                # key bar on top
+set -g pane-border-style "fg=colour240"
+set -g pane-active-border-style "fg=colour39"
+set -g pane-border-lines heavy            # single|double|heavy|rounded|simple
+set -g mode-style "bg=colour24,fg=colour231"   # selected row
+set -g message-style "bg=colour233,fg=colour248"  # log pane
+set -g @eol-critical colour203
+set -g @eol-warning  colour214
+set -g @eol-ok       colour114
+set -g @clock-format "%Y-%m-%d %H:%M:%S"  # upper-right live clock (strftime, like status-right)
+set -g @clock-style "bg=colour39,fg=colour16"
+bind-key R refresh                        # actions: refresh update update-all refresh-eol
+unbind-key q                              #   copy next-theme toggle-log help quit
+```
+
+Colours: `colour0–255`, `#rrggbb`, and tmux names (`red`, `brightblue`, …). Bundled themes: `default`, `nord`, `gruvbox`, `solarized-dark`, `dracula`, `mono` (16 colours).
+
+## Headless / cron / CI
+
+```bash
+uun --refresh-eol           # what the timer runs
+uun --report                # plain text; exit 0 ok, 1 attention, 2 something is EoL
+uun --report --json         # for monitoring pipelines
+```
+
+## Security notes
+
+- uun refuses to start if `config.toml`, `products.toml` or `alternatives.toml` is group- or world-writable, or owned by another non-root user. These files define commands that may run under sudo.
+- There is no `shell=True` anywhere. Probes run with a minimal environment, `LC_ALL=C`, stdin from `/dev/null`, and an 8 s timeout.
+- EoL fetches are HTTPS-only with TLS verification, a 2 MB response cap, schema-filtered JSON, product-slug validation, and atomic cache writes. If a fetch fails, the last good data is kept.
+- pip only ever touches the active virtualenv or `--user`, never system site-packages (PEP 668).
+- The systemd refresh unit is sandboxed: `ProtectSystem=strict`, `NoNewPrivileges` and restricted address families.
+
+## Tests
+
+```bash
+python3 -m unittest discover -s tests   # logic tests
+python3 tests/shots.py                  # regenerate demo screenshots (SVG)
+```
