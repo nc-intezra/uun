@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import copy
 import os
-import stat
 import sys
 import tomllib
 from dataclasses import dataclass, field
@@ -28,22 +27,13 @@ def data_path(name: str) -> Path:
     return Path(str(resources.files("uun") / "data" / name))
 
 
-class UnsafeFileError(RuntimeError):
-    pass
+from .safety import UnsafeFileError, read_trusted  # noqa: E402  (re-exported)
 
 
-def assert_safe(path: Path) -> None:
-    """Refuse files that other users could have tampered with.
-
-    config.toml / products.toml contain commands that may run under sudo, so a
-    group- or world-writable file (or one owned by another non-root user) is a
-    privilege-escalation vector.
-    """
-    st = path.stat()
-    if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
-        raise UnsafeFileError(f"{path} is group/world-writable; run: chmod go-w '{path}'")
-    if st.st_uid not in (0, os.getuid()):
-        raise UnsafeFileError(f"{path} is owned by uid {st.st_uid}, not you or root")
+def assert_safe(path: Path) -> str:
+    """Validate and read a file that may define commands run under sudo.
+    See safety.read_trusted (fd-based checks + directory chain, no TOCTOU)."""
+    return read_trusted(path)
 
 
 def _merge(base: dict, over: dict) -> dict:
@@ -72,12 +62,11 @@ class Config:
 
 
 def load_config(path: Path | None = None) -> Config:
-    defaults = tomllib.loads(data_path("config.default.toml").read_text())
+    defaults = tomllib.loads(read_trusted(data_path("config.default.toml")))
     path = path or CONFIG_FILE
     user: dict = {}
     if path.exists():
-        assert_safe(path)
-        user = tomllib.loads(path.read_text())
+        user = tomllib.loads(read_trusted(path))
     merged = _merge(defaults, user)
     g = merged.get("general", {})
     cfg = Config(
@@ -97,7 +86,7 @@ def load_config(path: Path | None = None) -> Config:
                                ("alternatives", "alternatives_file", "alternatives.toml")):
         user_file = CONFIG_DIR / default
         if user_file.exists():
-            assert_safe(user_file)
+            read_trusted(user_file)  # fail early; readers re-validate on every read
             setattr(cfg, attr, user_file)
         else:
             setattr(cfg, attr, data_path(default))

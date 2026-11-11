@@ -1,5 +1,9 @@
 """Render demo-mode screenshots (SVG) of the TUI: python3 tests/shots.py"""
 import asyncio
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # use this checkout, not an installed copy
 
 from uun.app import UunApp
 from uun.config import load_config

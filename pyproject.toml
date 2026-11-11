@@ -9,7 +9,13 @@ description = "Universal update notifier: one TUI for apt/dnf/zypper/pacman/flat
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
-dependencies = ["textual>=1.0"]
+dependencies = [
+    "textual>=8.2",
+    "rich>=14.0",
+    # transitive deps pinned to patched floors (security audit 2026-11, SECURITY.md)
+    "pygments>=2.20.0",       # CVE-2022-40896 (5.5), CVE-2026-4539 (3.3)
+    "markdown-it-py>=2.2.0",  # CVE-2023-26302 (5.5), CVE-2023-26303 (5.5)
+]
 
 [project.scripts]
 uun = "uun.__main__:main"
