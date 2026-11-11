@@ -44,8 +44,10 @@ for py in /usr/bin/python3 /usr/bin/python3.11 /usr/bin/python3.12 /usr/bin/pyth
     "$py" -I -m compileall -q -j 0 /usr/lib/uun >/dev/null 2>&1 || :
 done
 if [ "$1" -eq 1 ]; then
-    echo "uun: enable the daily EoL data refresh per user with:"
-    echo "     systemctl --user enable --now uun-eol-refresh.timer"
+    echo "uun: to refresh EoL data daily, run as your normal user (NOT with sudo):"
+    echo "       systemctl --user enable --now uun-eol-refresh.timer"
+    echo "     servers without a desktop session also need (once): sudo loginctl enable-linger \$USER"
+    echo "     or enable it for every user at their next login: sudo systemctl --global enable uun-eol-refresh.timer"
 fi
 :
 
