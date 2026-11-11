@@ -1,0 +1,138 @@
+name: release
+
+# Builds .deb/.rpm/wheel/sdist for an existing tag, install-tests them on the
+# target distros, and uploads them to that tag's GitHub release (draft or
+# published). The packaging recipe comes from the branch the workflow runs on;
+# the released source comes from the tag, untouched.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. v0.1.0)"
+        required: true
+      upload:
+        description: "Upload artifacts to the tag's release"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out packaging recipe
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          path: pkg
+          persist-credentials: false
+      - name: Check out release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          path: src
+          persist-credentials: false
+      - name: Verify tag matches project version
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          v=$(python3 -c 'import tomllib; print(tomllib.load(open("src/pyproject.toml","rb"))["project"]["version"])')
+          [ "v$v" = "$TAG" ] || { echo "tag $TAG != pyproject version $v"; exit 1; }
+      - name: Install build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq rpm
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install -q build pip-audit
+      - name: Audit bundled dependencies
+        run: |
+          "$RUNNER_TEMP/venv/bin/pip-audit" -r pkg/packaging/requirements.lock --require-hashes --disable-pip
+      - name: Build
+        run: |
+          export PATH="$RUNNER_TEMP/venv/bin:$PATH"
+          SOURCE_DATE_EPOCH=$(git -C src log -1 --format=%ct) pkg/packaging/build.sh src dist
+      - name: Inspect packages
+        run: |
+          dpkg-deb -I dist/*.deb
+          rpm -qip dist/*.rpm
+          rpm -qp --requires dist/*.rpm
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  test:
+    needs: build
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: ubuntu-24.04,         image: "ubuntu:24.04",              platform: linux/amd64, kind: deb }
+          - { name: debian-12,            image: "debian:12",                 platform: linux/amd64, kind: deb }
+          - { name: debian-13,            image: "debian:13",                 platform: linux/amd64, kind: deb }
+          - { name: raspberry-pi-arm64,   image: "debian:12",                 platform: linux/arm64, kind: deb }
+          - { name: raspberry-pi-armhf,   image: "debian:12",                 platform: linux/arm/v7, kind: deb }
+          - { name: rocky-9,              image: "rockylinux/rockylinux:9",   platform: linux/amd64, kind: rpm-dnf }
+          - { name: almalinux-9,          image: "almalinux:9",               platform: linux/amd64, kind: rpm-dnf }
+          - { name: fedora,               image: "fedora:latest",             platform: linux/amd64, kind: rpm-dnf }
+          - { name: opensuse-leap-15.6,   image: "opensuse/leap:15.6",        platform: linux/amd64, kind: rpm-zypper }
+          # informational: Python 3.10 by default; passes only if python3.11 is installable
+          - { name: ubuntu-22.04,         image: "ubuntu:22.04",              platform: linux/amd64, kind: deb, optional: true }
+    continue-on-error: ${{ matrix.optional == true }}
+    name: test (${{ matrix.name }})
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: packaging/ci
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: dist
+          path: dist
+      - if: matrix.platform != 'linux/amd64'
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1  # v4.4.0
+      - name: Install-test in ${{ matrix.image }} (${{ matrix.platform }})
+        env:
+          IMAGE: ${{ matrix.image }}
+          PLATFORM: ${{ matrix.platform }}
+          KIND: ${{ matrix.kind }}
+        run: |
+          case "$KIND" in deb) f=$(ls dist/*.deb);; *) f=$(ls dist/*.rpm);; esac
+          docker run --rm --platform "$PLATFORM" -v "$PWD:/w:ro" "$IMAGE" \
+            sh /w/packaging/ci/smoke.sh "$KIND" "/w/$f"
+
+  upload:
+    needs: test
+    if: inputs.upload
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: dist
+          path: dist
+      - name: Upload to the release for ${{ inputs.tag }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          (cd dist && sha256sum -c SHA256SUMS)
+          id=$(gh api "repos/$REPO/releases" --paginate --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -1)
+          [ -n "$id" ] || { echo "no release (draft or published) for $TAG"; exit 1; }
+          for f in dist/*; do
+            name=$(basename "$f")
+            old=$(gh api "repos/$REPO/releases/$id/assets" --jq ".[] | select(.name == \"$name\") | .id")
+            [ -z "$old" ] || gh api -X DELETE "repos/$REPO/releases/assets/$old"
+            gh api -X POST "https://uploads.github.com/repos/$REPO/releases/$id/assets?name=$name" \
+              -H "Content-Type: application/octet-stream" --input "$f" --jq '.name + "  " + (.size|tostring)'
+          done
