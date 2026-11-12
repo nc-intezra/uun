@@ -24,4 +24,4 @@ uun = "uun.__main__:main"
 include = ["uun*"]
 
 [tool.setuptools.package-data]
-uun = ["data/*.toml", "data/themes/*.conf"]
+uun = ["data/*.toml", "data/themes/*.conf", "data/eol-allowed-signers"]

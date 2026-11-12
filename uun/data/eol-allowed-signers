@@ -1,0 +1,8 @@
+# Keys trusted to sign uun's monthly EoL data bundles (ssh-keygen -Y verify).
+# Format: one line per key, see ALLOWED SIGNERS in ssh-keygen(1):
+#
+#   eol@uun namespaces="uun-eol",valid-after="20261201" ssh-ed25519 AAAA... uun-eol-signing
+#
+# Rotation: add the new key with valid-after, keep the old one with a
+# valid-before date, ship both in a uun release, then remove the old line.
+# Until a key is added here, uun refuses every bundle.
