@@ -190,10 +190,14 @@ class Signatures(unittest.TestCase):
             bundle.verify_signature(self.data, self.sign(), empty)
         self.assertIn("no signing key", str(cm.exception))
 
-    def test_shipped_placeholder_refuses_everything(self):
+    def test_shipped_signers_refuse_other_keys(self):
+        # The allowed-signers file shipped in uun/data must never accept a
+        # bundle signed by any other key (here: this test's throwaway key).
+        # Before a key is configured it refuses with "no signing key"; after,
+        # with "signature check failed". Either way: refused.
         with self.assertRaises(bundle.BundleError) as cm:
             bundle.verify_signature(self.data, self.sign())
-        self.assertIn("no signing key", str(cm.exception))
+        self.assertRegex(str(cm.exception), "no signing key|signature check failed")
 
 
 if __name__ == "__main__":
