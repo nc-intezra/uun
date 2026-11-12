@@ -13,6 +13,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--theme", help="theme name or path to a .conf file")
     ap.add_argument("--config", help="alternate config.toml")
     ap.add_argument("--refresh-eol", action="store_true", help="fetch EoL data into the cache and exit")
+    ap.add_argument("--import-eol", metavar="FILE",
+                    help="verify and import a signed EoL bundle (uun-eol-YYYY-MM.json) and exit")
+    ap.add_argument("--sig", metavar="FILE", help="with --import-eol: signature file (default FILE.sig)")
+    ap.add_argument("--allow-older", action="store_true",
+                    help="with --import-eol: accept a bundle older than the current data")
     ap.add_argument("--report", action="store_true", help="print a plain-text report and exit (cron/CI)")
     ap.add_argument("--json", action="store_true", help="with --report: JSON output")
     ap.add_argument("--list-themes", action="store_true")
@@ -40,16 +45,30 @@ def main(argv: list[str] | None = None) -> int:
         from .theme import list_themes
         print("\n".join(list_themes()))
         return 0
-    if a.refresh_eol:
-        from . import eol, scan
-        res = eol.refresh(cfg.eol_api, scan.all_slugs(cfg))
-        if res.get("cache_error"):
-            print(f"uun: {res['cache_error']}", file=sys.stderr)
+    if a.import_eol:
+        from . import bundle
+        try:
+            status, b = bundle.import_bundle(Path(a.import_eol), Path(a.sig) if a.sig else None,
+                                             allow_older=a.allow_older)
+        except bundle.BundleError as e:
+            print(f"uun: {e}", file=sys.stderr)
+            return 1
+        if status == "current":
+            print(f"uun: EoL bundle {b['month']} is already in use")
         else:
-            print(f"uun: cached {len(res['products'])} products")
+            print(f"uun: imported EoL bundle {b['month']} "
+                  f"({len(b['products'])} products, generated {b['generated_at']})")
+        return 0
+    if a.refresh_eol:
+        from . import scan
+        res = scan.refresh_eol(cfg)
+        for m in res["messages"]:
+            print(f"uun: {m}")
+        for w in res["warnings"]:
+            print(f"uun: {w}", file=sys.stderr)
         for slug, err in res.get("errors", {}).items():
             print(f"  {slug}: {err}", file=sys.stderr)
-        return 0 if res["products"] and not res.get("cache_error") else 1
+        return 0 if res["ok"] else 1
     if a.report:
         from . import scan
         return scan.report(cfg, as_json=a.json)
