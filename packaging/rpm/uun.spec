@@ -21,6 +21,7 @@ AutoReqProv:    no
 Requires:       ((python3 >= 3.11) or python3.11 or python3.12 or python3.13 or python311 or python312 or python313)
 Requires:       /bin/sh
 Recommends:     sudo
+Recommends:     openssh-clients
 
 %description
 One terminal UI to run updates across dnf, yum, zypper, apt, pacman,

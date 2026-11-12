@@ -60,6 +60,21 @@ run_as 'set -e; d=$(mktemp -d); cd "$d";
     test ! -e "$d/PWNED" || { echo "FAIL: code from cwd executed"; exit 1; }
     echo "ok: nothing executed from $d"'
 
+if [ -e /usr/lib/uun/uun/data/eol-baseline.json ]; then
+    log "offline: packaged EoL snapshot is verified and used without network"
+    run_as 'set -e; mkdir -p ~/.config/uun;
+        printf "[general]\neol_source = \"offline\"\n" > ~/.config/uun/config.toml;
+        chmod 600 ~/.config/uun/config.toml;
+        rc=0; /usr/bin/uun --report > /tmp/uun-offline.txt 2>&1 || rc=$?;
+        cat /tmp/uun-offline.txt; case $rc in 0|1|2) ;; *) exit "$rc";; esac;
+        grep -q "^EoL data: bundle 20[0-9][0-9]-[0-9][0-9]" /tmp/uun-offline.txt \
+            || { echo "FAIL: packaged EoL snapshot not used"; exit 1; };
+        /usr/bin/uun --refresh-eol | grep -q "offline mode";
+        rm -f ~/.config/uun/config.toml ~/.cache/uun/eol.json /tmp/uun-offline.txt'
+else
+    log "no packaged EoL snapshot in this build (skipping offline test)"
+fi
+
 log "fetch EoL data and report (network)"
 run_as 'timeout 300 /usr/bin/uun --refresh-eol' || echo "WARN: EoL refresh failed (network?)"
 run_as 'rc=0; /usr/bin/uun --report || rc=$?; case $rc in 0|1|2) echo "report exit $rc (ok)";; *) exit "$rc";; esac'

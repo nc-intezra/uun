@@ -69,6 +69,15 @@ for whl in sys.argv[2:]:
         z.extractall(dest)
 PY
 find "$R/usr/lib/uun" -name __pycache__ -prune -exec rm -rf {} +
+# Optional offline baseline: a signed EoL bundle (and its .sig) shipped in
+# the package and imported on first run when nothing newer is cached.
+if [ -n "${UUN_EOL_BASELINE:-}" ]; then
+    [ -f "$UUN_EOL_BASELINE" ] && [ -f "$UUN_EOL_BASELINE.sig" ] \
+        || { echo "UUN_EOL_BASELINE: need $UUN_EOL_BASELINE and its .sig" >&2; exit 1; }
+    install -m 644 "$UUN_EOL_BASELINE" "$R/usr/lib/uun/uun/data/eol-baseline.json"
+    install -m 644 "$UUN_EOL_BASELINE.sig" "$R/usr/lib/uun/uun/data/eol-baseline.json.sig"
+    echo "== embedded EoL baseline $(basename "$UUN_EOL_BASELINE")"
+fi
 install -m 755 "$PKG/launcher.sh" "$R/usr/bin/uun"
 sed -e 's#^ExecStart=.*#ExecStart=/usr/bin/uun --refresh-eol#' \
     "$SRC/systemd/uun-eol-refresh.service" > "$R/usr/lib/systemd/user/uun-eol-refresh.service"
