@@ -172,7 +172,10 @@ def default_allowed_signers() -> Path:
 def verify_signature(data: bytes, signature: Path, allowed_signers: Path | None = None) -> None:
     """Check an SSH signature (namespace uun-eol, principal eol@uun) with
     ssh-keygen from a trusted directory. Raises BundleError on any failure."""
-    allowed = allowed_signers or default_allowed_signers()
+    # ssh-keygen runs with cwd=/ (safety.SAFE_CWD), so relative paths would
+    # resolve against / instead of the caller's directory: make them absolute.
+    allowed = Path(allowed_signers or default_allowed_signers()).resolve()
+    signature = Path(signature).resolve()
     # same ownership/permission checks as config files: this file decides
     # which key uun trusts
     keys = [ln for ln in read_trusted(allowed).splitlines()

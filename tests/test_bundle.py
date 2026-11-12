@@ -164,6 +164,18 @@ class Signatures(unittest.TestCase):
         bundle.verify_signature(self.data, self.sign(), self.allowed)
         self.assertEqual(bundle.main(["verify", str(self.file), "--allowed-signers", str(self.allowed)]), 0)
 
+    def test_relative_paths(self):
+        # regression: the first real publish passed dist/x.json.sig while
+        # ssh-keygen runs with cwd=/, so the relative path missed
+        self.sign()
+        old = os.getcwd()
+        os.chdir(self.d)
+        try:
+            bundle.verify_signature(self.data, Path(f"{self.file.name}.sig"), Path(self.allowed.name))
+            self.assertEqual(bundle.main(["verify", self.file.name, "--allowed-signers", self.allowed.name]), 0)
+        finally:
+            os.chdir(old)
+
     def test_tampered_bundle_rejected(self):
         sig = self.sign()
         with self.assertRaises(bundle.BundleError):
