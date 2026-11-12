@@ -76,7 +76,7 @@ For each detected product, uun:
 
 | file | purpose |
 |---|---|
-| `config.toml` | theme, `warn_days` (180), `critical_days` (60), cache age, per-manager enable + update commands |
+| `config.toml` | theme, `warn_days` (180), `critical_days` (60), cache age, `eol_source`, `stale_days`, per-manager enable + update commands |
 | `products.toml` | what to probe (copy from `uun/data/` to extend: slug, argv, version regex, package globs) |
 | `alternatives.toml` | your own alternative suggestions |
 | `themes/*.conf` | tmux-syntax themes |
@@ -118,14 +118,27 @@ Colours: `colour0–255`, `#rrggbb`, and tmux names (`red`, `brightblue`, …). 
 ## Headless / cron / CI
 
 ```bash
-uun --refresh-eol           # what the timer runs
+uun --refresh-eol           # what the timer runs (follows eol_source)
 uun --report                # plain text; exit 0 ok, 1 attention, 2 something is EoL
 uun --report --json         # for monitoring pipelines
 ```
 
 ## Offline EoL data
 
-A signed monthly snapshot of endoflife.date is published as release `eol-YYYY-MM` for machines without internet access. See [docs/eol-data.md](docs/eol-data.md) for how to verify a bundle and how the monthly pipeline works.
+A signed monthly snapshot of endoflife.date is published as release `eol-YYYY-MM`. Choose where uun gets its EoL data with `eol_source` in `config.toml`:
+
+| `eol_source` | Network use |
+|---|---|
+| `"api"` (default) | Live per-product queries to endoflife.date |
+| `"bundle"` | One download of the newest signed snapshot from GitHub (`eol_bundle_repo`) |
+| `"offline"` | None. Copy the bundle and its `.sig` over and import them yourself |
+
+```bash
+uun --import-eol uun-eol-2026-11.json        # verifies uun-eol-2026-11.json.sig first
+uun --import-eol FILE --allow-older          # deliberately go back to an older snapshot
+```
+
+Every bundle's signature is checked with `ssh-keygen` against the key shipped in the package. uun also refuses a bundle older than the data it already has, so an old snapshot can't be passed off as current. Packages built after a snapshot exists carry it as a baseline, so a fresh offline install has EoL data from the first run. The title bar and `--report` say which data is in use and how old it is. Both warn once it is older than `stale_days` (45). See [docs/eol-data.md](docs/eol-data.md) for verifying by hand and how the monthly pipeline works.
 
 ## Security notes
 
