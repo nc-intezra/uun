@@ -1,0 +1,198 @@
+name: eol-data
+
+# Monthly signed snapshot of endoflife.date for offline uun installs.
+# Design: "uun: offline EoL data bundles" (docs/eol-data.md).
+#
+#   build   - read-only: fetch /products/full, normalize with uun's own
+#             allow-list, run the quality gates, write the bundle.
+#             On pull requests that touch the pipeline it stops here (dry run
+#             against the live API).
+#   publish - main only, protected `eol-signing` environment: sign with
+#             ssh-keygen -Y, verify against the key uun ships, attest, publish
+#             release eol-YYYY-MM (never marked Latest), open+close a summary
+#             issue (keeps the schedule alive: GitHub disables scheduled
+#             workflows after 60 days without repository activity).
+#   report-failure - opens an issue when a scheduled/manual run fails.
+on:
+  schedule:
+    - cron: "23 4 3 * *"   # 04:23 UTC on the 3rd: off the busy top-of-hour/1st-of-month slots
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Sign and publish (off = dry run)"
+        type: boolean
+        default: true
+  pull_request:
+    paths:
+      - ".github/workflows/eol-data.yml"
+      - "uun/bundle.py"
+      - "uun/eol.py"
+      - "uun/safety.py"
+      - "uun/data/products.toml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eol-data
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      file: ${{ steps.bundle.outputs.file }}
+      month: ${{ steps.bundle.outputs.month }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download last month's bundle (comparison baseline)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          id=$(gh api "repos/$REPO/releases" --paginate --jq \
+            '.[] | select(.draft | not) | select(.tag_name | test("^eol-[0-9]{4}-[0-9]{2}$")) | [.created_at, (.assets[] | select(.name | test("^uun-eol-[0-9]{4}-[0-9]{2}\\.json$")) | .id | tostring)] | join(" ")' \
+            | sort | tail -n 1 | cut -d' ' -f2)
+          if [ -n "$id" ]; then
+            gh api -H "Accept: application/octet-stream" "repos/$REPO/releases/assets/$id" > "$RUNNER_TEMP/previous.json"
+            echo "baseline asset $id ($(wc -c < "$RUNNER_TEMP/previous.json") bytes)"
+          else
+            echo "no previous bundle: first run, comparison gates skipped"
+          fi
+      - name: Fetch endoflife.date /api/v1/products/full
+        run: |
+          curl -fsS --retry 3 --retry-delay 30 --retry-all-errors --max-time 180 \
+            --max-filesize 16777216 -H 'Accept: application/json' \
+            -A "uun-eol-data (+https://github.com/${GITHUB_REPOSITORY})" \
+            https://endoflife.date/api/v1/products/full -o "$RUNNER_TEMP/full.json"
+          echo "fetched $(wc -c < "$RUNNER_TEMP/full.json") bytes"
+      - name: Build bundle and run quality gates
+        id: bundle
+        run: |
+          set -eu
+          prev=()
+          [ -s "$RUNNER_TEMP/previous.json" ] && prev=(--previous "$RUNNER_TEMP/previous.json")
+          out=$(python3 -m uun.bundle build --upstream "$RUNNER_TEMP/full.json" "${prev[@]}" \
+                --out dist --summary "$GITHUB_STEP_SUMMARY")
+          echo "$out"
+          echo "file=$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["file"])')" >> "$GITHUB_OUTPUT"
+          echo "month=$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["month"])')" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: eol-bundle
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: eol-signing
+    permissions:
+      contents: write        # create the eol-YYYY-MM release
+      id-token: write        # artifact attestation (Sigstore)
+      attestations: write
+      issues: write          # monthly summary issue (schedule keep-alive)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          name: eol-bundle
+          path: dist
+      - name: Sign with ssh-keygen -Y
+        env:
+          KEY: ${{ secrets.UUN_EOL_SIGNING_KEY }}
+          FILE: dist/${{ needs.build.outputs.file }}
+        run: |
+          set -eu
+          [ -n "$KEY" ] || { echo "::error::secret UUN_EOL_SIGNING_KEY is not set in the eol-signing environment"; exit 1; }
+          umask 077
+          k="$RUNNER_TEMP/eol-signing-key"
+          trap 'rm -f "$k"' EXIT
+          printf '%s\n' "$KEY" > "$k"
+          ssh-keygen -q -Y sign -f "$k" -n uun-eol "$FILE"
+      - name: Verify with the key uun ships (uun/data/eol-allowed-signers)
+        env:
+          FILE: dist/${{ needs.build.outputs.file }}
+        run: python3 -m uun.bundle verify "$FILE"
+      - name: Checksums
+        env:
+          FILE: ${{ needs.build.outputs.file }}
+        run: cd dist && sha256sum "$FILE" "$FILE.sig" > SHA256SUMS && cat SHA256SUMS
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
+        with:
+          subject-path: dist/uun-eol-*.json
+      - name: Publish release eol-${{ needs.build.outputs.month }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          MONTH: ${{ needs.build.outputs.month }}
+          FILE: ${{ needs.build.outputs.file }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -eu
+          tag="eol-$MONTH"
+          body=$(printf '%s\n' \
+            "Signed monthly snapshot of [endoflife.date](https://endoflife.date) data for offline uun installs (MIT License)." \
+            "" \
+            "Verify before use, with OpenSSH only (\`eol-allowed-signers\` ships in uun/data):" \
+            "" \
+            "\`\`\`" \
+            "sha256sum -c SHA256SUMS" \
+            "ssh-keygen -Y verify -f eol-allowed-signers -I eol@uun -n uun-eol -s $FILE.sig < $FILE" \
+            "\`\`\`" \
+            "" \
+            "Built by [this run]($RUN_URL); a GitHub artifact attestation is also available (\`gh attestation verify $FILE -R $REPO\`).")
+          if id=$(gh api "repos/$REPO/releases/tags/$tag" --jq .id 2>/dev/null); then
+            echo "release $tag exists (re-run this month): replacing its assets"
+            gh api "repos/$REPO/releases/$id/assets" --jq '.[].id' | while read -r a; do
+              gh api -X DELETE "repos/$REPO/releases/assets/$a"; done
+            gh api -X PATCH "repos/$REPO/releases/$id" -f body="$body" --jq .html_url
+          else
+            id=$(gh api -X POST "repos/$REPO/releases" -f tag_name="$tag" -f target_commitish="$SHA" \
+                 -f name="EoL data $MONTH" -f body="$body" -f make_latest=false --jq .id)
+          fi
+          for f in "dist/$FILE" "dist/$FILE.sig" dist/SHA256SUMS; do
+            gh api -X POST "https://uploads.github.com/repos/$REPO/releases/$id/assets?name=$(basename "$f")" \
+              -H "Content-Type: application/octet-stream" --input "$f" --jq '.name + "  " + (.size|tostring)'
+          done
+          latest=$(gh api "repos/$REPO/releases/latest" --jq .tag_name 2>/dev/null || true)
+          case "$latest" in eol-*) echo "::error::$tag became the Latest release"; exit 1;; esac
+      - name: Monthly summary issue (also keeps the schedule enabled)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          MONTH: ${{ needs.build.outputs.month }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -eu
+          n=$(gh api -X POST "repos/$REPO/issues" -f title="EoL data $MONTH published" \
+              -f body="Release [eol-$MONTH](https://github.com/$REPO/releases/tag/eol-$MONTH) was signed and published by [this run]($RUN_URL). Closed automatically." --jq .number)
+          gh api -X PATCH "repos/$REPO/issues/$n" -f state=closed -f state_reason=completed --jq '.html_url'
+
+  report-failure:
+    needs: [build, publish]
+    if: failure() && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    steps:
+      - name: Open an issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh api -X POST "repos/$REPO/issues" -f title="EoL data pipeline failed ($(date -u +%Y-%m-%d))" \
+            -f body="The monthly EoL data run failed: $RUN_URL. Nothing was published; uun keeps using last month's bundle. Check the failed step (a quality gate, the API, or signing) before re-running." \
+            --jq .html_url

@@ -123,6 +123,10 @@ uun --report                # plain text; exit 0 ok, 1 attention, 2 something is
 uun --report --json         # for monitoring pipelines
 ```
 
+## Offline EoL data
+
+A signed monthly snapshot of endoflife.date is published as release `eol-YYYY-MM` for machines without internet access. See [docs/eol-data.md](docs/eol-data.md) for how to verify a bundle and how the monthly pipeline works.
+
 ## Security notes
 
 See [SECURITY.md](SECURITY.md) for the full pre-release audit (CVSS-scored findings and fixes). In short:
