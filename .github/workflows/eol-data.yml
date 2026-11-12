@@ -81,6 +81,19 @@ jobs:
           echo "$out"
           echo "file=$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["file"])')" >> "$GITHUB_OUTPUT"
           echo "month=$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["month"])')" >> "$GITHUB_OUTPUT"
+      - name: Dry-run sign + verify with a throwaway key (same commands as publish)
+        if: github.event_name == 'pull_request'
+        env:
+          FILE: dist/${{ steps.bundle.outputs.file }}
+        run: |
+          set -eu
+          umask 077
+          t="$RUNNER_TEMP/dry"; mkdir -p "$t"
+          ssh-keygen -q -t ed25519 -N '' -C dry-run -f "$t/key"
+          printf 'eol@uun namespaces="uun-eol" %s\n' "$(cat "$t/key.pub")" > "$t/allowed"
+          ssh-keygen -q -Y sign -f "$t/key" -n uun-eol "$FILE"
+          python3 -m uun.bundle verify "$FILE" --allowed-signers "$t/allowed"
+          rm -f "$FILE.sig"   # never upload a throwaway signature
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: eol-bundle
