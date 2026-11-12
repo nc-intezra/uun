@@ -279,6 +279,7 @@ class ImportSigned(unittest.TestCase):
                                f'{(d / "k.pub").read_text().strip()}\n')
             allowed.chmod(0o600)
             f = make_bundle(d, "2026-11-03T04:23:11Z")
+            Path(f"{f}.sig").unlink()    # placeholder; ssh-keygen won't overwrite it
             subprocess.run([safety.which("ssh-keygen"), "-q", "-Y", "sign", "-f", str(key),
                             "-n", bundle.NAMESPACE, str(f)], check=True, capture_output=True)
             cache = d / "c" / "eol.json"
