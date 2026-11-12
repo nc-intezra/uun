@@ -6,3 +6,4 @@
 # Rotation: add the new key with valid-after, keep the old one with a
 # valid-before date, ship both in a uun release, then remove the old line.
 # Until a key is added here, uun refuses every bundle.
+eol@uun namespaces="uun-eol",valid-after="20261112" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINFH9RIBAKUhyk7GMlzM//6CIxaxQONQC7ksATHQzJMB uun-eol-signing
