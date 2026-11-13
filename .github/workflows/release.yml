@@ -237,6 +237,11 @@ jobs:
                   -f make_latest=true --jq '.tag_name + " " + .html_url')
             echo "published $pub"
             case "$pub" in "$TAG "*) ;; *) echo "release published under the wrong tag: $pub"; exit 1;; esac
-            tagsha=$(gh api "repos/$REPO/commits/refs/tags/$TAG" --jq .sha)
-            [ "$tagsha" = "$SHA" ] || { echo "tag $TAG points at $tagsha, expected $SHA"; exit 1; }
+            # A just-created tag can take a few seconds to resolve via the API.
+            tagsha=
+            for _ in 1 2 3 4 5 6; do
+              tagsha=$(gh api "repos/$REPO/commits/refs/tags/$TAG" --jq .sha 2>/dev/null) && break
+              sleep 10
+            done
+            [ "$tagsha" = "$SHA" ] || { echo "tag $TAG points at ${tagsha:-nothing}, expected $SHA"; exit 1; }
           fi
