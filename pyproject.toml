@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "uun"
-version = "0.1.1"
+version = "0.2.0"
 description = "Universal update notifier: one TUI for apt/dnf/zypper/pacman/flatpak/snap/brew/pip/pipx/cargo/rustup/npm updates plus end-of-life tracking"
 readme = "README.md"
 license = "MIT"
