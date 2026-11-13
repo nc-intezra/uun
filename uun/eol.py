@@ -113,7 +113,17 @@ def refresh(api: str, slugs: list[str], cache: Path = EOL_CACHE, timeout: float 
                 products[slug] = data
             else:
                 errors[slug] = err or "unknown error"
-    out = {"fetched_at": time.time(), "products": products, "errors": errors}
+    now = time.time()
+    out = {"fetched_at": now, "as_of": now, "source": "api", "products": products, "errors": errors}
+    err = write_cache(out, cache)
+    if err:
+        out["cache_error"] = err
+    return out
+
+
+def write_cache(out: dict, cache: Path = EOL_CACHE) -> str | None:
+    """Atomically write the cache. Returns an error message instead of raising
+    (an unwritable cache must not lose freshly fetched data for the session)."""
     tmp = None
     try:
         cache.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -121,9 +131,9 @@ def refresh(api: str, slugs: list[str], cache: Path = EOL_CACHE, timeout: float 
         with os.fdopen(fd, "w") as f:
             json.dump(out, f)
         os.replace(tmp, cache)
+        return None
     except OSError as e:
-        # Unwritable cache (e.g. XDG_CACHE_HOME pointing at another user's
-        # home): keep the fetched data for this session, report clearly.
+        # e.g. XDG_CACHE_HOME pointing at another user's home
         if tmp:
             try:
                 os.unlink(tmp)
@@ -133,8 +143,7 @@ def refresh(api: str, slugs: list[str], cache: Path = EOL_CACHE, timeout: float 
         val = os.environ.get("XDG_CACHE_HOME")
         if val and str(cache).startswith(val.rstrip("/") + "/"):
             hint = f" (XDG_CACHE_HOME={val} — is it pointing at another user's directory?)"
-        out["cache_error"] = f"cannot write EoL cache {cache}: {e.strerror or e}{hint}"
-    return out
+        return f"cannot write EoL cache {cache}: {e.strerror or e}{hint}"
 
 
 def load_cache(cache: Path = EOL_CACHE) -> dict:
@@ -163,15 +172,40 @@ def load_cache(cache: Path = EOL_CACHE) -> dict:
             if prod is not None:
                 products[slug] = prod
     ts = data.get("fetched_at")
+    ts = ts if isinstance(ts, (int, float)) else None
+    as_of = data.get("as_of")
+    as_of = as_of if isinstance(as_of, (int, float)) else ts   # caches from <= 0.1.1
+    source = data.get("source") if data.get("source") in ("api", "bundle") else "api"
+    meta = data.get("bundle") if isinstance(data.get("bundle"), dict) else {}
     errors = data.get("errors") if isinstance(data.get("errors"), dict) else {}
-    return {"fetched_at": ts if isinstance(ts, (int, float)) else None, "products": products,
-            "errors": {clean(k, 64): clean(v, 80) for k, v in errors.items()}}
+    out = {"fetched_at": ts, "as_of": as_of, "source": source, "products": products,
+           "errors": {clean(k, 64): clean(v, 80) for k, v in errors.items()}}
+    if source == "bundle":
+        out["bundle"] = {"month": clean(meta.get("month", ""), 7),
+                         "generated_at": clean(meta.get("generated_at", ""), 20)}
+    return out
 
 
 def cache_age_hours(cache: Path = EOL_CACHE) -> float | None:
+    """Age of the *data* (a bundle's snapshot time, or the live fetch time)."""
     data = load_cache(cache)
-    ts = data.get("fetched_at")
+    ts = data.get("as_of")
     return (time.time() - ts) / 3600 if isinstance(ts, (int, float)) else None
+
+
+def cache_info(cache: Path = EOL_CACHE, data: dict | None = None) -> dict:
+    """What the TUI title bar and the report say about the data in use."""
+    data = data if data is not None else load_cache(cache)
+    ts = data.get("as_of")
+    if not data.get("products") or not isinstance(ts, (int, float)):
+        return {"source": None, "age_days": None, "label": "none"}
+    age_h = (time.time() - ts) / 3600
+    if data.get("source") == "bundle":
+        label = f"bundle {data.get('bundle', {}).get('month') or '?'}"
+    else:
+        label = "live"
+    when = f"{age_h:.0f}h old" if age_h < 48 else f"{age_h / 24:.0f}d old"
+    return {"source": data.get("source"), "age_days": age_h / 24, "label": f"{label}, {when}"}
 
 
 # ---------------------------------------------------------------- evaluation

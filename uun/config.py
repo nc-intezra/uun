@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import os
+import re
 import sys
 import tomllib
 from dataclasses import dataclass, field
@@ -82,6 +83,9 @@ def _merge(base: dict, over: dict) -> dict:
     return out
 
 
+EOL_SOURCES = ("api", "bundle", "offline")
+
+
 @dataclass
 class Config:
     theme: str = "default"
@@ -91,6 +95,9 @@ class Config:
     auto_refresh_eol: bool = True
     use_sudo: bool = True
     eol_api: str = "https://endoflife.date/api/v1/products"
+    eol_source: str = "api"
+    eol_bundle_repo: str = "nc-intezra/uun"
+    stale_days: int = 45
     managers: dict = field(default_factory=dict)
     products_file: Path | None = None
     alternatives_file: Path | None = None
@@ -113,11 +120,20 @@ def load_config(path: Path | None = None) -> Config:
         auto_refresh_eol=bool(g.get("auto_refresh_eol", True)),
         use_sudo=bool(g.get("use_sudo", True)),
         eol_api=g.get("eol_api", Config.eol_api),
+        eol_source=str(g.get("eol_source", "api")),
+        eol_bundle_repo=str(g.get("eol_bundle_repo", Config.eol_bundle_repo)),
+        stale_days=int(g.get("stale_days", 45)),
         managers=merged.get("managers", {}),
         raw=merged,
     )
     if not cfg.eol_api.startswith("https://"):
         sys.exit("uun: eol_api must be an https:// URL")
+    if cfg.eol_source not in EOL_SOURCES:
+        raise ConfigError(f"eol_source must be one of {', '.join(EOL_SOURCES)} (got {cfg.eol_source!r})")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}", cfg.eol_bundle_repo):
+        raise ConfigError(f"eol_bundle_repo must look like owner/name (got {cfg.eol_bundle_repo!r})")
+    if cfg.stale_days < 1:
+        raise ConfigError("stale_days must be at least 1")
     for key, attr, default in (("products", "products_file", "products.toml"),
                                ("alternatives", "alternatives_file", "alternatives.toml")):
         user_file = CONFIG_DIR / default

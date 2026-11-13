@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import sys
+import time
 import tomllib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -57,19 +59,84 @@ def evaluate_all(cfg: Config, found: list[detect.Detected], checks: dict,
     return out
 
 
+def eol_refresh_due(cfg: Config, cache: Path = eol.EOL_CACHE) -> bool:
+    """Whether the TUI should refresh EoL data on start (auto_refresh_eol)."""
+    if cfg.eol_source == "offline" or not cfg.auto_refresh_eol:
+        return False
+    data = eol.load_cache(cache)
+    if not data.get("products"):
+        return True
+    # live data ages from its fetch; for bundles, from the last time we checked
+    # GitHub (a bundle's own as-of date is weeks old by design)
+    ts = data.get("fetched_at") if cfg.eol_source == "bundle" else data.get("as_of")
+    return ts is None or (time.time() - ts) / 3600 > cfg.eol_max_age_hours
+
+
+def refresh_eol(cfg: Config, cache: Path = eol.EOL_CACHE) -> dict:
+    """Refresh EoL data from the configured source.
+
+    Returns {"ok": bool, "messages": [str], "warnings": [str], "session": dict|None}
+    where "session" is live data that could not be saved (use it for this run).
+    """
+    from . import bundle
+    out: dict = {"ok": True, "messages": [], "warnings": [], "session": None}
+    note = bundle.ensure_baseline(cache)
+    if note:
+        (out["warnings"] if "not used" in note else out["messages"]).append(note)
+    if cfg.eol_source == "offline":
+        info = eol.cache_info(cache)
+        out["messages"].append(f"EoL data: offline mode, using {info['label']} "
+                               "(import new data with `uun --import-eol FILE`)")
+        out["ok"] = info["source"] is not None
+        return out
+    if cfg.eol_source == "bundle":
+        try:
+            out["messages"].append(bundle.refresh_from_github(cfg.eol_bundle_repo, cache))
+        except bundle.BundleError as e:
+            out["ok"] = False
+            out["warnings"].append(f"EoL bundle refresh failed: {e}")
+        return out
+    res = eol.refresh(cfg.eol_api, all_slugs(cfg), cache)
+    errs = res.get("errors", {})
+    out["messages"].append(f"EoL data: {len(res['products'])} products"
+                           + (f", {len(errs)} failed: {', '.join(list(errs)[:5])}" if errs else ""))
+    out["errors"] = errs
+    if res.get("cache_error"):
+        out["session"] = res
+        out["warnings"].append(res["cache_error"])
+    out["ok"] = bool(res["products"]) and not res.get("cache_error")
+    return out
+
+
+def data_status(cfg: Config, cache: Path = eol.EOL_CACHE, data: dict | None = None) -> tuple[str, bool]:
+    """(label, stale) for the titlebar and reports."""
+    info = eol.cache_info(cache, data)
+    stale = info["source"] is None or (info["age_days"] is not None and info["age_days"] > cfg.stale_days)
+    return info["label"], stale
+
+
 def load_alternatives(path: Path) -> dict:
     return tomllib.loads(read_trusted(path))
 
 
 def report(cfg: Config, as_json: bool = False) -> int:
     """Non-interactive report for cron/CI. Exit: 0 ok, 1 attention, 2 EoL present."""
+    from . import bundle
+    note = bundle.ensure_baseline()          # fresh offline install: use the packaged snapshot
+    if note:
+        print(f"uun: {note}", file=sys.stderr)
     mgrs = managers.available(cfg.managers)
     checks = check_all(mgrs)
     found = detect.detect(detect.load_specs(cfg.products_file))
     statuses = evaluate_all(cfg, found, checks)
     alts = load_alternatives(cfg.alternatives_file)
+    info = eol.cache_info()
+    data_s, stale = data_status(cfg, data=None)
     if as_json:
         print(json.dumps({
+            "eol_data": {"source": info["source"], "label": info["label"],
+                         "age_days": None if info["age_days"] is None else round(info["age_days"], 1),
+                         "stale": stale},
             "managers": {k: {"count": v.count, "security": v.security, "note": v.note,
                              "error": v.error} for k, v in checks.items()},
             "eol": [{**{k: (str(v) if v is not None else None) for k, v in s.__dict__.items()},
@@ -77,6 +144,7 @@ def report(cfg: Config, as_json: bool = False) -> int:
                      if s.suggest_alternative else []} for s in statuses],
         }, indent=2))
     else:
+        print(f"EoL data: {data_s}" + (f"  (WARNING: older than {cfg.stale_days} days)" if stale else "") + "\n")
         print("== Package managers ==")
         for k, v in checks.items():
             cnt = "?" if v.count is None else v.count

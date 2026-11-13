@@ -10,6 +10,13 @@ eol_max_age_hours = 24       # TUI refreshes the EoL cache when older than this
 auto_refresh_eol = true
 use_sudo = true              # prefix root-only update commands with sudo when not root
 eol_api = "https://endoflife.date/api/v1/products"
+# Where EoL data comes from:
+#   "api"     - live per-product queries to endoflife.date (default)
+#   "bundle"  - the monthly signed snapshot published on GitHub (one download)
+#   "offline" - never touch the network; import bundles with `uun --import-eol FILE`
+eol_source = "api"
+eol_bundle_repo = "nc-intezra/uun"   # GitHub repo whose eol-YYYY-MM releases are used
+stale_days = 45              # warn when the EoL data is older than this
 
 # Each manager: enabled flag and the update command(s) run (in order) when you
 # press `u`. Commands are argv lists, never passed through a shell.

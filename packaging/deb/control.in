@@ -3,7 +3,7 @@ Version: @VERSION@-1
 Architecture: all
 Maintainer: nc-intezra <nc-intezra@users.noreply.github.com>
 Depends: python3 (>= 3.11) | python3.11 | python3.12 | python3.13
-Recommends: sudo
+Recommends: sudo, openssh-client
 Section: admin
 Priority: optional
 Homepage: https://github.com/nc-intezra/uun

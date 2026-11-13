@@ -91,7 +91,25 @@ jobs:
       - name: Audit bundled dependencies
         run: |
           "$RUNNER_TEMP/venv/bin/pip-audit" -r pkg/packaging/requirements.lock --require-hashes --disable-pip
+      - name: Fetch and verify the latest EoL bundle (offline baseline)
+        id: baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Releases from before offline support (no uun/bundle.py) ship without one.
+          [ -f src/uun/bundle.py ] || { echo "no bundle support in this source"; exit 0; }
+          tag=$(gh release list -R "$REPO" --exclude-drafts --limit 100 --json tagName \
+                  --jq '[.[].tagName | select(test("^eol-[0-9]{4}-[0-9]{2}$"))] | sort | last // ""')
+          [ -n "$tag" ] || { echo "::warning::no eol-YYYY-MM release yet: building without a baseline"; exit 0; }
+          d="$RUNNER_TEMP/baseline"; mkdir -p "$d"
+          gh release download "$tag" -R "$REPO" -D "$d" -p "uun-eol-${tag#eol-}.json" -p "uun-eol-${tag#eol-}.json.sig"
+          f="$d/uun-eol-${tag#eol-}.json"
+          ( cd src && python3 -m uun.bundle verify "$f" )
+          echo "path=$f" >> "$GITHUB_OUTPUT"
       - name: Build
+        env:
+          UUN_EOL_BASELINE: ${{ steps.baseline.outputs.path }}
         run: |
           export PATH="$RUNNER_TEMP/venv/bin:$PATH"
           SOURCE_DATE_EPOCH=$(git -C src log -1 --format=%ct) pkg/packaging/build.sh src dist

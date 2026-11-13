@@ -18,7 +18,7 @@ ssh-keygen -Y verify -f /usr/lib/uun/uun/data/eol-allowed-signers \
   -I eol@uun -n uun-eol -s uun-eol-2026-12.json.sig < uun-eol-2026-12.json
 ```
 
-From a source checkout, `python3 -m uun.bundle verify uun-eol-2026-12.json` also re-validates the contents. Importing bundles into uun (`uun --import-eol`) arrives in a later release.
+From a source checkout, `python3 -m uun.bundle verify uun-eol-2026-12.json` also re-validates the contents. `uun --import-eol uun-eol-2026-12.json` does all of this and then makes the bundle uun's EoL data. See the README's *Offline EoL data* section.
 
 ## How a run works
 

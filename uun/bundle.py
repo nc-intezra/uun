@@ -14,13 +14,21 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
+import shutil
 import subprocess
 import sys
+import tempfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import detect
-from .config import data_path
+from . import __version__, detect, eol
+from .config import EOL_CACHE, data_path
 from .eol import _SLUG, normalize_product
 from .safety import child_env, clean, read_trusted, which
 
@@ -194,6 +202,149 @@ def verify_signature(data: bytes, signature: Path, allowed_signers: Path | None 
     if r.returncode != 0:
         msg = clean((r.stderr or r.stdout).decode("utf-8", "replace").strip(), 200)
         raise BundleError(f"signature check failed: {msg or 'exit ' + str(r.returncode)}")
+
+
+# ------------------------------------------------------------ import (client)
+
+BASELINE = "eol-baseline.json"
+_REPO = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$")
+_TAG = re.compile(r"^eol-(\d{4}-\d{2})$")
+DOWNLOAD_DEADLINE = 60.0
+
+
+def iso_epoch(s: str) -> float:
+    return datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+
+
+def _describe(data: dict) -> str:
+    if data.get("source") == "bundle":
+        return f"bundle {data.get('bundle', {}).get('month') or '?'}"
+    ts = data.get("as_of")
+    when = datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d") if ts else "unknown date"
+    return f"live endoflife.date data from {when}"
+
+
+def import_bundle(path: Path, sig: Path | None = None, allowed_signers: Path | None = None,
+                  allow_older: bool = False, cache: Path = EOL_CACHE) -> tuple[str, dict]:
+    """Verify a signed bundle and make it uun's EoL data.
+
+    Returns ("imported" | "current", bundle). Raises BundleError when anything
+    is wrong; the existing cache is left untouched in that case.
+    Rollback protection: a bundle must be newer than the data uun already has
+    (a live fetch counts by its fetch time), unless allow_older is set.
+    """
+    path = Path(path)
+    try:
+        st = path.stat()
+        if st.st_size > MAX_BUNDLE_BYTES:
+            raise BundleError(f"{path} is larger than {MAX_BUNDLE_BYTES} bytes")
+        data = path.read_bytes()
+    except OSError as e:
+        raise BundleError(f"cannot read {path}: {e.strerror or e}") from None
+    sig = Path(sig) if sig else Path(f"{path}.sig")
+    if not sig.exists():
+        raise BundleError(f"signature {sig} not found (download it next to the bundle)")
+    verify_signature(data, sig, allowed_signers)
+    b = load_bundle(data)
+    new_as_of = iso_epoch(b["generated_at"])
+    current = eol.load_cache(cache)
+    cur_as_of = current.get("as_of") if current.get("products") else None
+    if cur_as_of is not None and not allow_older:
+        same = current.get("source") == "bundle" and \
+            current.get("bundle", {}).get("generated_at") == b["generated_at"]
+        if same:
+            return "current", b
+        if new_as_of <= cur_as_of:
+            raise BundleError(f"refusing to import bundle {b['month']} (made {b['generated_at']}): "
+                              f"uun already has newer data ({_describe(current)}). "
+                              "Use --allow-older to downgrade on purpose.")
+    out = {"fetched_at": time.time(), "as_of": new_as_of, "source": "bundle",
+           "bundle": {"month": b["month"], "generated_at": b["generated_at"]},
+           "products": b["products"], "errors": {}}
+    err = eol.write_cache(out, cache)
+    if err:
+        raise BundleError(err)
+    return "imported", b
+
+
+def ensure_baseline(cache: Path = EOL_CACHE, baseline: Path | None = None) -> str | None:
+    """Fresh offline installs: if the bundle shipped inside the package is newer
+    than the cache (or there is no cache), import it. Returns a log message when
+    something happened or failed, None when nothing needed doing."""
+    baseline = baseline or data_path(BASELINE)
+    if not baseline.exists():
+        return None
+    try:
+        raw = json.loads(baseline.read_bytes()[:MAX_BUNDLE_BYTES])
+        gen = raw.get("generated_at") if isinstance(raw, dict) else None
+        cur = eol.load_cache(cache)
+        if cur.get("products") and isinstance(gen, str) and cur.get("as_of") is not None \
+                and iso_epoch(gen) <= cur["as_of"]:
+            return None
+        status, b = import_bundle(baseline, cache=cache)
+        return f"EoL data: using the bundled snapshot {b['month']} ({len(b['products'])} products)" \
+            if status == "imported" else None
+    except (BundleError, ValueError, OSError) as e:
+        return f"EoL data: bundled snapshot not used: {e}"
+
+
+def _download(url: str, limit: int) -> bytes:
+    req = urllib.request.Request(url, headers={"User-Agent": f"uun/{__version__}",
+                                               "Accept": "application/octet-stream, application/json"})
+    start, chunks, total = time.monotonic(), [], 0
+    try:
+        with eol._OPENER.open(req, timeout=15) as r:      # https-only redirects
+            while chunk := r.read(65536):
+                total += len(chunk)
+                if total > limit:
+                    raise BundleError(f"{url}: response larger than {limit} bytes")
+                if time.monotonic() - start > DOWNLOAD_DEADLINE:
+                    raise BundleError(f"{url}: download too slow")
+                chunks.append(chunk)
+    except urllib.error.HTTPError as e:
+        raise BundleError(clean(f"{url}: HTTP {e.code} {e.msg}", 160)) from None
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        raise BundleError(clean(f"{url}: {getattr(e, 'reason', e)}", 160)) from None
+    return b"".join(chunks)
+
+
+def latest_release(repo: str) -> tuple[str, str]:
+    """Newest eol-YYYY-MM release of `repo` → (tag, month)."""
+    if not _REPO.match(repo):
+        raise BundleError(f"invalid eol_bundle_repo {repo!r} (expected owner/name)")
+    raw = _download(f"https://api.github.com/repos/{repo}/releases?per_page=50", 4 * 1024 * 1024)
+    try:
+        releases = json.loads(raw)
+    except ValueError:
+        raise BundleError("GitHub API returned invalid JSON") from None
+    months = sorted((m.group(1), r["tag_name"]) for r in releases if isinstance(r, dict)
+                    and not r.get("draft") and isinstance(r.get("tag_name"), str)
+                    and (m := _TAG.match(r["tag_name"])))
+    if not months:
+        raise BundleError(f"no eol-YYYY-MM releases found in {repo}")
+    month, tag = months[-1]
+    return tag, month
+
+
+def refresh_from_github(repo: str, cache: Path = EOL_CACHE) -> str:
+    """eol_source = "bundle": fetch the newest signed bundle and import it.
+    Returns a log message; raises BundleError on failure (cache untouched)."""
+    tag, month = latest_release(repo)
+    base = f"https://github.com/{repo}/releases/download/{urllib.parse.quote(tag)}"
+    name = f"uun-eol-{month}.json"
+    tmp = Path(tempfile.mkdtemp(prefix="uun-eol-"))   # 0700, private to this user
+    try:
+        (tmp / name).write_bytes(_download(f"{base}/{name}", MAX_BUNDLE_BYTES))
+        (tmp / f"{name}.sig").write_bytes(_download(f"{base}/{name}.sig", 64 * 1024))
+        status, b = import_bundle(tmp / name, cache=cache)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    if status == "current":
+        cur = eol.load_cache(cache)
+        cur["fetched_at"] = time.time()    # remember the check, so we don't re-ask every start
+        eol.write_cache(cur, cache)
+        return f"EoL data: already up to date (bundle {b['month']})"
+    return f"EoL data: imported signed bundle {b['month']} from {repo} ({len(b['products'])} products)"
 
 
 # --------------------------------------------------------------------- CLI

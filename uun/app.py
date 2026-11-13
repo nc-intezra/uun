@@ -257,13 +257,17 @@ class UunApp(App):
 
     @_display_only
     def update_titlebar(self) -> None:
-        age = eol.cache_age_hours() if not self.demo else 2.0
-        age_s = "never" if age is None else (f"{age:.0f}h ago" if age < 48 else f"{age / 24:.0f}d ago")
+        if self.demo:
+            data_s, stale = "bundle 2026-11, 9d old", False
+        else:
+            data_s, stale = scan.data_status(self.cfg, data=self.session_eol)
         host = "demo-host" if self.demo else socket.gethostname()
         os_name = "Ubuntu 22.04.5 LTS (demo data)" if self.demo else self.os_name
         txt = Text()
         txt.append(f" uun {__version__} ", style="bold reverse")
-        txt.append(f"  {host}  │  {os_name}  │  EoL data: {age_s}  │  theme: {self.tmux.name}")
+        txt.append(f"  {host}  │  {os_name}  │  EoL data: ")
+        txt.append(data_s + (" (stale)" if stale else ""), style="bold yellow" if stale else "")
+        txt.append(f"  │  theme: {self.tmux.name}")
         self.query_one("#titlebar", Static).update(txt)
 
     @_display_only
@@ -327,20 +331,24 @@ class UunApp(App):
             from . import demo
             self.call_from_thread(self._demo_load, demo)
             return
-        age = eol.cache_age_hours()
-        if force_eol or (self.cfg.auto_refresh_eol and (age is None or age > self.cfg.eol_max_age_hours)):
-            self.call_from_thread(self.log_line, "fetching EoL data from endoflife.date …")
-            res = eol.refresh(self.cfg.eol_api, scan.all_slugs(self.cfg))
-            n_err = len(res.get("errors", {}))
-            self.call_from_thread(self.log_line, f"EoL data: {len(res['products'])} products"
-                                  + (f", {n_err} failed: {', '.join(list(res['errors'])[:5])}" if n_err else ""))
-            if res.get("cache_error"):
-                # keep this session's fresh data even though it couldn't be saved
-                self.session_eol = res
-                self.call_from_thread(self.log_line, res["cache_error"])
-                self.call_from_thread(self.notify, res["cache_error"], severity="warning",
-                                      timeout=8, markup=False)
-            self.call_from_thread(self.update_titlebar)
+        if force_eol or scan.eol_refresh_due(self.cfg):
+            src = {"api": "endoflife.date", "bundle": f"the signed bundle in {self.cfg.eol_bundle_repo}",
+                   "offline": "local data only"}[self.cfg.eol_source]
+            self.call_from_thread(self.log_line, f"refreshing EoL data from {src} …")
+            res = scan.refresh_eol(self.cfg)
+        else:
+            from . import bundle
+            note = bundle.ensure_baseline()
+            res = {"messages": [note] if note else [], "warnings": [], "session": None}
+        for m in res["messages"]:
+            self.call_from_thread(self.log_line, m)
+        for w in res["warnings"]:
+            self.call_from_thread(self.log_line, w)
+            self.call_from_thread(self.notify, w, severity="warning", timeout=8, markup=False)
+        if res.get("session"):
+            # keep this session's fresh data even though it couldn't be saved
+            self.session_eol = res["session"]
+        self.call_from_thread(self.update_titlebar)
         self.mgrs = managers.available(self.cfg.managers)
         self.call_from_thread(self._mgr_placeholders)
         self.checks = {}
