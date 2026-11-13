@@ -29,7 +29,9 @@ case $kind in
         dnf install -y -q "$pkg"
         ;;
     rpm-zypper)
-        zypper --non-interactive install --allow-unsigned-rpm "$pkg"
+        # openSUSE container images set solver.onlyRequires; install the
+        # package's Recommends (openssh-clients) the way a normal system would.
+        zypper --non-interactive install --recommends --allow-unsigned-rpm "$pkg"
         ;;
 esac
 
@@ -62,7 +64,7 @@ run_as 'set -e; d=$(mktemp -d); cd "$d";
 
 if [ -e /usr/lib/uun/uun/data/eol-baseline.json ]; then
     log "offline: packaged EoL snapshot is verified and used without network"
-    run_as 'set -e; mkdir -p ~/.config/uun;
+    run_as 'set -e; umask 077; mkdir -p ~/.config/uun;
         printf "[general]\neol_source = \"offline\"\n" > ~/.config/uun/config.toml;
         chmod 600 ~/.config/uun/config.toml;
         rc=0; /usr/bin/uun --report > /tmp/uun-offline.txt 2>&1 || rc=$?;
